@@ -1,4 +1,4 @@
-# Homework 2: So100 Tutorial
+# Homework 2: Robot Control and MDP
 
 * **Due Date: 12.03.26 23:59 CET**
 * **Needs to be solved individually. Gradescope checks for duplicate code.**
