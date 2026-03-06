@@ -210,7 +210,7 @@ Then open the TensorBoard at the provided link (http://localhost:6006) in your b
 The checkpoints are automatically saved. For evaluation, choose a specific checkpoint in `scripts/evaluate_rand_targets.py`. For example, run:
 
 ```bash
-python scripts/evaluate_rand_targets.py --load_run=1 --checkpoint=500
+mjpython scripts/evaluate_rand_targets.py --load_run=1 --checkpoint=100
 ```
 
 The simulation window will pop up. The robot will perform tracking for 10 episodes (each episode is set to 2 seconds). The final ee_tracking_error will be printed on our terminal, including an average value at the end of the 10 episodes. **Include these print outputs in your video.**
