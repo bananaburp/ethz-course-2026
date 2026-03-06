@@ -19,7 +19,10 @@ def generate_quintic_spline_waypoints(start, end, num_points):
     Returns:
         np.ndarray: Generated waypoints.
     """
-    raise NotImplementedError()
+    s = np.linspace(0, 1, num_points)
+    f_s = 10 * s**3 - 15 * s**4 + 6 * s**5
+    waypoints = start + (end - start) * f_s[:, np.newaxis]
+    return waypoints
 
 
 def pid_control(tracking_error_history, timestep, Kp=150.0, Ki=0.0, Kd=0.01):
@@ -31,7 +34,7 @@ def pid_control(tracking_error_history, timestep, Kp=150.0, Ki=0.0, Kd=0.01):
     1. The Proportional (P) term is the most recent error.
     2. The Integral (I) term is the sum of all past errors, multiplied by the simulation timestep.
     3. The Derivative (D) term is the rate of change of the error (difference between the last two errors divided by the timestep).
-       If there is only one error in history, the D term should be zero.
+    If there is only one error in history, the D term should be zero.
     4. Compute the final control signal: Kp * P + Ki * I + Kd * D.
     
     Args:
@@ -44,5 +47,8 @@ def pid_control(tracking_error_history, timestep, Kp=150.0, Ki=0.0, Kd=0.01):
     Returns:
         np.ndarray: Control signal.
     """
-    raise NotImplementedError()
-            
+    P = tracking_error_history[-1]
+    I = np.sum(tracking_error_history) * timestep
+    D = (tracking_error_history[-1] - tracking_error_history[-2]) / timestep if len(tracking_error_history) > 1 else 0.0
+    control_signal = Kp * P + Ki * I + Kd * D
+    return control_signal
