@@ -138,10 +138,10 @@ def get_obs(qpos: np.ndarray, ee_pos_w: np.ndarray, ee_rot_w: np.ndarray,
 
     obs_parts = [qpos, ee_pos_base, ee_quat_base, target_pos_base]
 
-    # # Bonus: include target velocity in base frame so the policy can anticipate motion
-    # if target_vel_w is not None:
-    #     target_vel_base = base_rot_w.T @ target_vel_w
-    #     obs_parts.append(target_vel_base)
+    # Bonus: include target velocity in base frame so the policy can anticipate motion
+    if target_vel_w is not None:
+        target_vel_base = base_rot_w.T @ target_vel_w
+        obs_parts.append(target_vel_base)
 
-    # obs = np.concatenate(obs_parts)
+    obs = np.concatenate(obs_parts)
     return obs
