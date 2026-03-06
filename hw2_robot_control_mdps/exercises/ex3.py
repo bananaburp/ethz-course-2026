@@ -95,8 +95,8 @@ def compute_reward(ee_tracking_error: float) -> float:
     return reward
 
 
-def get_obs(qpos: np.ndarray, ee_pos_w: np.ndarray, ee_rot_w: np.ndarray, 
-            base_pos_w: np.ndarray, base_rot_w: np.ndarray, target_pos_w: np.ndarray) -> np.ndarray:
+def get_obs(qpos: np.ndarray, ee_pos_w: np.ndarray, ee_rot_w: np.ndarray,
+            base_pos_w: np.ndarray, base_rot_w: np.ndarray, target_pos_w: np.ndarray, target_vel: np.ndarray = None) -> np.ndarray:
     """
     TODO: Extract the observation vector from the environment robot state variables. 
 
