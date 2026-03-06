@@ -95,15 +95,16 @@ def compute_reward(ee_tracking_error: float) -> float:
     return reward
 
 
-def get_obs(qpos: np.ndarray, ee_pos_w: np.ndarray, ee_rot_w: np.ndarray, 
-            base_pos_w: np.ndarray, base_rot_w: np.ndarray, target_pos_w: np.ndarray) -> np.ndarray:
+def get_obs(qpos: np.ndarray, ee_pos_w: np.ndarray, ee_rot_w: np.ndarray,
+            base_pos_w: np.ndarray, base_rot_w: np.ndarray, target_pos_w: np.ndarray,
+            target_vel_w: np.ndarray = None) -> np.ndarray:
     """
-    TODO: Extract the observation vector from the environment robot state variables. 
+    TODO: Extract the observation vector from the environment robot state variables.
 
-    Note that in Mujoco, states can be directly accessed in the world frame. But for policy genealization, it is important to 
+    Note that in Mujoco, states can be directly accessed in the world frame. But for policy genealization, it is important to
     represent the states in the robot's base frame instead of the world frame, so that the policy can be invariant to the
     robot's absolute position in the world.
-    
+
     Inputs:
     - qpos: np.ndarray. Current joint positions. Dimensionality: 1D array, Shape: (num_joints,).
     - ee_pos_w: np.ndarray. Current end-effector 3D position in world frame. Dimensionality: 1D array, Shape: (3,).
@@ -111,6 +112,7 @@ def get_obs(qpos: np.ndarray, ee_pos_w: np.ndarray, ee_rot_w: np.ndarray,
     - base_pos_w: np.ndarray. Current base 3D position in world frame. Dimensionality: 1D array, Shape: (3,).
     - base_rot_w: np.ndarray. Current base 3D rotation matrix in world frame. Dimensionality: 2D array, Shape: (3, 3).
     - target_pos_w: np.ndarray. Current target 3D position in world frame. Dimensionality: 1D array, Shape: (3,).
+    - target_vel_w: np.ndarray. Current target velocity in world frame. Dimensionality: 1D array, Shape: (3,). Optional.
 
     Returns:
     - obs: np.ndarray. The observation vector containing the following robot state variables in order:
@@ -119,6 +121,7 @@ def get_obs(qpos: np.ndarray, ee_pos_w: np.ndarray, ee_rot_w: np.ndarray,
             - end-effector position in robot's base frame (ee_pos_base)
             - end-effector quaternion in robot's base frame, must be normalized to represent a valid rotation (ee_quat_base)
             - target position in robot's base frame (target_pos_base)
+            - target velocity in robot's base frame (target_vel_base), only included if target_vel_w is provided
         ]
 
     Hints: You can use the provided functions quat_mul, quat_conjugate, quat_normalize, rot_mat_to_quat for quaternion operations.
@@ -133,5 +136,12 @@ def get_obs(qpos: np.ndarray, ee_pos_w: np.ndarray, ee_rot_w: np.ndarray,
     ee_quat_base = quat_mul(quat_conjugate(base_quat_w), ee_quat_w)
     ee_quat_base = quat_normalize(ee_quat_base)
 
-    obs = np.concatenate([qpos, ee_pos_base, ee_quat_base, target_pos_base])
+    obs_parts = [qpos, ee_pos_base, ee_quat_base, target_pos_base]
+
+    # # Bonus: include target velocity in base frame so the policy can anticipate motion
+    # if target_vel_w is not None:
+    #     target_vel_base = base_rot_w.T @ target_vel_w
+    #     obs_parts.append(target_vel_base)
+
+    # obs = np.concatenate(obs_parts)
     return obs

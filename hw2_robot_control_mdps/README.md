@@ -119,7 +119,7 @@ You can see the robot does not actually move under a control law but merely gets
 After implementing the PID controller, you can test the whole system by running the following:
 
 ```bash
-python scripts/pid_control.py
+mjpython scripts/pid_control.py
 ```
 
 A viewer window should pop up showing the robot smoothly moving between several predefined keypoints.
@@ -220,7 +220,7 @@ The trained policy gets a full score if **Average final EE tracking error < 0.05
 Observe the robot's performance when deploying your trained policy. You can run the following code and compare the performance of your RL policy with the previously implemented PID controller:
 
 ```bash
-python scripts/evaluate_trajectory.py --load_run=1 --checkpoint=500
+mjpython scripts/evaluate_trajectory.py --load_run=3 --checkpoint=350
 ```
 
 What difference can you observe when the robot is tracking the keypoints on the Lemniscate curve? To improve the performance of the RL policy, what changes can you make in the functions in ex3? Modify these functions (you can also change their arguments, and make corresponding changes in `env/so100_tracking_env.py`). Train another RL policy with your new environments and show the performance in the video, and explain how your changes impact the robot's performance. You can also make changes to the PPO hyperparameters (gamma, ent_coef, etc.). 
