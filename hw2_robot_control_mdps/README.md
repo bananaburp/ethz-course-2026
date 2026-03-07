@@ -3,7 +3,7 @@
 * **Due Date: 12.03.26 23:59 CET**
 * **Needs to be solved individually. Gradescope checks for duplicate code.**
 * **Video deliverables have to be uploaded in a video format covering all video requirements of 3 exercises, less than 5:30 min in total, 4:30 min without bonus question**
-* **"In case your total video size surpasses 100MB, please upload multiple videos of smaller size to Gradescope.**
+* **In case your total video size surpasses 100MB, please upload multiple videos of smaller size to Gradescope.**
 # Installation
 
 Follow the instructions in the [Installation_Guide.md](Installation_Guide.md) to install the required packages and dependencies.
