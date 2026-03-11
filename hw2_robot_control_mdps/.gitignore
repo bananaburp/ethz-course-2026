@@ -6,3 +6,5 @@ logs/
 # ignore venv folder
 venv/
 .venv/
+
+*.mov
