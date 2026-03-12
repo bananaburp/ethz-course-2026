@@ -22,3 +22,5 @@ video_script.md
 *.mp4
 
 .claude/
+
+hw3_imitation_learning/datasets

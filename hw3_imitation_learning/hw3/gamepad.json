@@ -1,0 +1,9 @@
+{
+  "0": "record",
+  "1": "end_episode",
+  "2": "reset",
+  "3": "goal_cube_red",
+  "13": "gripper_close",
+  "14": "gripper_open",
+  "9": "escape"
+}

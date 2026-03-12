@@ -34,6 +34,7 @@ JOINT_NAMES: tuple[str, ...] = (
 CAMERA_NAMES: tuple[str, ...] = ("left_wrist", "angle", "top")
 
 DEFAULT_KEYMAP_PATH: Path = Path(__file__).resolve().parent / "keymap.json"
+DEFAULT_GAMEPAD_MAP_PATH: Path = Path(__file__).resolve().parent / "gamepad.json"
 
 CUBE_JOINT_NAME: str = "red_box_joint"
 CUBE_DIM: int = 7  # free joint: pos(3) + quat_wxyz(4)
@@ -142,6 +143,257 @@ def handle_teleop_key(
         lo = model.actuator_ctrlrange[:, 0]
         hi = model.actuator_ctrlrange[:, 1]
         data.ctrl[:] = np.clip(data.ctrl, lo, hi)
+
+
+# ── scaled teleop action (analog gamepad) ────────────────────────────
+
+GAMEPAD_POS_STEP: float = 0.01   # metres per frame at full stick deflection
+GAMEPAD_ROT_STEP_DEG: float = 2.0  # degrees per frame at full stick deflection
+GAMEPAD_DEADZONE: float = 0.15
+
+
+def apply_scaled_teleop_action(
+    action_name: str,
+    data: mujoco.MjData,
+    model: mujoco.MjModel,
+    mocap_id: int,
+    jaw_act_idx: int,
+    scale: float = 1.0,
+) -> None:
+    """Like ``handle_teleop_key`` but scales movement by *scale* (0‥1 for analog axes)."""
+    pos_step = GAMEPAD_POS_STEP * scale
+    rot_step = GAMEPAD_ROT_STEP_DEG * scale
+    if action_name == "move_up":
+        data.mocap_pos[mocap_id, 2] += pos_step
+    elif action_name == "move_down":
+        data.mocap_pos[mocap_id, 2] -= pos_step
+    elif action_name == "move_left":
+        data.mocap_pos[mocap_id, 0] -= pos_step
+    elif action_name == "move_right":
+        data.mocap_pos[mocap_id, 0] += pos_step
+    elif action_name == "move_forward":
+        data.mocap_pos[mocap_id, 1] += pos_step
+    elif action_name == "move_backward":
+        data.mocap_pos[mocap_id, 1] -= pos_step
+    elif action_name == "rot_x_pos":
+        data.mocap_quat[mocap_id] = rotate_quaternion(
+            data.mocap_quat[mocap_id], [1, 0, 0], rot_step
+        )
+    elif action_name == "rot_x_neg":
+        data.mocap_quat[mocap_id] = rotate_quaternion(
+            data.mocap_quat[mocap_id], [1, 0, 0], -rot_step
+        )
+    elif action_name == "rot_y_pos":
+        data.mocap_quat[mocap_id] = rotate_quaternion(
+            data.mocap_quat[mocap_id], [0, 1, 0], rot_step
+        )
+    elif action_name == "rot_y_neg":
+        data.mocap_quat[mocap_id] = rotate_quaternion(
+            data.mocap_quat[mocap_id], [0, 1, 0], -rot_step
+        )
+    elif action_name == "rot_z_pos":
+        data.mocap_quat[mocap_id] = rotate_quaternion(
+            data.mocap_quat[mocap_id], [0, 0, 1], rot_step
+        )
+    elif action_name == "rot_z_neg":
+        data.mocap_quat[mocap_id] = rotate_quaternion(
+            data.mocap_quat[mocap_id], [0, 0, 1], -rot_step
+        )
+    elif action_name == "gripper_open":
+        data.ctrl[jaw_act_idx] += 0.10 * scale
+        lo = model.actuator_ctrlrange[:, 0]
+        hi = model.actuator_ctrlrange[:, 1]
+        data.ctrl[:] = np.clip(data.ctrl, lo, hi)
+    elif action_name == "gripper_close":
+        data.ctrl[jaw_act_idx] -= 0.10 * scale
+        lo = model.actuator_ctrlrange[:, 0]
+        hi = model.actuator_ctrlrange[:, 1]
+        data.ctrl[:] = np.clip(data.ctrl, lo, hi)
+
+
+# ── gamepad poller ────────────────────────────────────────────────────
+
+
+class GamepadPoller:
+    """Poll a PS5 DualSense (or generic HID gamepad) via pygame.
+
+    Axis layout (DualSense on macOS via pygame):
+        0  Left stick X    (−1 = left,  +1 = right)
+        1  Left stick Y    (−1 = up,    +1 = down)  → Y-inverted for robot
+        2  Right stick X   (−1 = left,  +1 = right)
+        3  Right stick Y   (−1 = up,    +1 = down)  → Y-inverted for robot
+        4  L2 trigger      (−1 = idle,  +1 = full)
+        5  R2 trigger      (−1 = idle,  +1 = full)
+
+    Button layout defaults (edit gamepad.json to remap):
+        0  Cross (×)   → record toggle
+        1  Circle (○)  → end episode
+        2  Square (□)  → reset / discard
+        3  Triangle (△)→ goal_cube_red  (multicube only)
+        4  L1          → gripper_close
+        5  R1          → gripper_open
+        9  Options     → escape / quit
+
+    Run  python scripts/record_teleop_demos.py --probe-gamepad  to print
+    live button/axis indices so you can find the right numbers for your
+    controller, then edit  hw3/gamepad.json  to remap.
+    """
+
+    _DEFAULT_BUTTON_MAP: dict[int, str] = {
+        0: "record",
+        1: "end_episode",
+        2: "reset",
+        3: "goal_cube_red",
+        4: "gripper_close",
+        5: "gripper_open",
+        9: "escape",
+    }
+
+    def __init__(self, map_path: Path | None = None) -> None:
+        try:
+            import pygame  # noqa: PLC0415
+        except ImportError as exc:
+            raise ImportError(
+                "pygame is required for gamepad support.  Install it with:\n"
+                "    pip install pygame"
+            ) from exc
+
+        pygame.init()
+        pygame.joystick.init()
+        if pygame.joystick.get_count() == 0:
+            raise RuntimeError(
+                "No gamepad detected.  Connect your PS5 controller "
+                "(Bluetooth or USB) and try again."
+            )
+        self.joy = pygame.joystick.Joystick(0)
+        self.joy.init()
+        print(
+            f"Gamepad connected: {self.joy.get_name()!r}  "
+            f"(axes={self.joy.get_numaxes()}, buttons={self.joy.get_numbuttons()})"
+        )
+
+        self.button_map = self._load_button_map(map_path)
+        print(
+            "Gamepad button map: "
+            + ", ".join(f"btn{k}→{v}" for k, v in sorted(self.button_map.items()))
+        )
+        self._prev_buttons: dict[int, bool] = {b: False for b in self.button_map}
+
+    @classmethod
+    def _load_button_map(cls, map_path: Path | None) -> dict[int, str]:
+        path = map_path or DEFAULT_GAMEPAD_MAP_PATH
+        if path.exists():
+            with open(path) as f:
+                raw: dict[str, str] = json.load(f)
+            return {int(k): v for k, v in raw.items()}
+        return dict(cls._DEFAULT_BUTTON_MAP)
+
+    def _axis(self, idx: int) -> float:
+        return self.joy.get_axis(idx) if idx < self.joy.get_numaxes() else 0.0
+
+    def poll_analog_actions(self) -> list[tuple[str, float]]:
+        """Return ``(action_name, scale)`` pairs for axes above the dead-zone.
+
+        Call once per control frame *after* ``poll_button_events`` (which pumps
+        the pygame event queue).
+        """
+        dz = GAMEPAD_DEADZONE
+        actions: list[tuple[str, float]] = []
+
+        # Left stick X → robot X (left / right)
+        ax = self._axis(0)
+        if abs(ax) > dz:
+            actions.append(("move_right" if ax > 0 else "move_left", abs(ax)))
+
+        # Left stick Y → robot Y (forward / backward); pygame Y axis is inverted
+        ay = self._axis(1)
+        if abs(ay) > dz:
+            actions.append(("move_backward" if ay > 0 else "move_forward", abs(ay)))
+
+        # Right stick Y → robot Z (up / down); pygame Y axis is inverted
+        ry = self._axis(3)
+        if abs(ry) > dz:
+            actions.append(("move_down" if ry > 0 else "move_up", abs(ry)))
+
+        # Right stick X → yaw (rot_z)
+        rx = self._axis(2)
+        if abs(rx) > dz:
+            actions.append(("rot_z_pos" if rx > 0 else "rot_z_neg", abs(rx)))
+
+        # L2 trigger → wrist pitch negative  (remap −1..+1 → 0..1)
+        l2 = (self._axis(4) + 1.0) / 2.0
+        if l2 > dz:
+            actions.append(("rot_x_neg", l2))
+
+        # R2 trigger → wrist pitch positive
+        r2 = (self._axis(5) + 1.0) / 2.0
+        if r2 > dz:
+            actions.append(("rot_x_pos", r2))
+
+        return actions
+
+    def poll_button_events(self) -> list[str]:
+        """Pump the pygame event queue and return action strings for newly pressed buttons."""
+        import pygame  # noqa: PLC0415
+
+        pygame.event.pump()
+        events: list[str] = []
+        for btn_id, action in self.button_map.items():
+            if btn_id >= self.joy.get_numbuttons():
+                continue
+            pressed = bool(self.joy.get_button(btn_id))
+            if pressed and not self._prev_buttons[btn_id]:
+                events.append(action)
+            self._prev_buttons[btn_id] = pressed
+        return events
+
+    def close(self) -> None:
+        import pygame  # noqa: PLC0415
+
+        self.joy.quit()
+        pygame.joystick.quit()
+
+
+def probe_gamepad() -> None:
+    """Interactive probe mode: print button and axis events so you can identify
+    the correct indices for your controller.
+
+    Press Ctrl-C to exit.  Edit  hw3/gamepad.json  with the indices you find.
+    """
+    import pygame  # noqa: PLC0415
+
+    pygame.init()
+    pygame.joystick.init()
+    if pygame.joystick.get_count() == 0:
+        raise RuntimeError("No gamepad detected.")
+    joy = pygame.joystick.Joystick(0)
+    joy.init()
+    n_axes = joy.get_numaxes()
+    n_buttons = joy.get_numbuttons()
+    print(f"Controller: {joy.get_name()!r}  axes={n_axes}  buttons={n_buttons}")
+    print("Press buttons or move sticks — indices will print here.  Ctrl-C to quit.\n")
+
+    prev_buttons = [False] * n_buttons
+    prev_axes = [0.0] * n_axes
+    try:
+        while True:
+            pygame.event.pump()
+            for i in range(n_buttons):
+                pressed = bool(joy.get_button(i))
+                if pressed and not prev_buttons[i]:
+                    print(f"  BUTTON {i:2d} pressed")
+                prev_buttons[i] = pressed
+            for i in range(n_axes):
+                v = joy.get_axis(i)
+                if abs(v) > 0.3 and abs(v - prev_axes[i]) > 0.05:
+                    print(f"  AXIS   {i:2d}  value={v:+.2f}")
+                prev_axes[i] = v
+            pygame.time.wait(16)
+    except KeyboardInterrupt:
+        print("\nDone.  Edit hw3/gamepad.json to set your button mapping.")
+    finally:
+        joy.quit()
+        pygame.joystick.quit()
 
 
 # ── camera view composition ──────────────────────────────────────────
