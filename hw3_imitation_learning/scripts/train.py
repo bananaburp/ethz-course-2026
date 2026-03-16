@@ -8,7 +8,8 @@ Usage:
     --zarr datasets/processed/single_cube/processed_ee_xyz.zarr \
     --state-keys state_ee_xyz state_gripper "state_cube[:5]"  \
     --action-keys action_ee_xyz action_gripper \
-    --policy obstacle --chunk-size 16 --d-model 512 --depth 4
+    --policy obstacle --chunk-size 16 --d-model 512 --depth 4 \
+    --layer-norm --residual
     
     python scripts/train.py \
         --zarr datasets/processed/single_cube/processed_ee_full.zarr \
@@ -155,6 +156,18 @@ def main() -> None:
         help="Dropout probability after each hidden ReLU (default: 0.1). Set to 0 to disable.",
     )
     parser.add_argument(
+        "--layer-norm",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Insert LayerNorm after each hidden linear layer (default: off).",
+    )
+    parser.add_argument(
+        "--residual",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Add residual skip connections in hidden blocks (default: off).",
+    )
+    parser.add_argument(
         "--episode-split",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -221,6 +234,8 @@ def main() -> None:
         d_model=args.d_model,
         depth=args.depth,
         dropout=args.dropout,
+        layer_norm=args.layer_norm,
+        residual=args.residual,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -291,6 +306,8 @@ def main() -> None:
                     "d_model": args.d_model,
                     "depth": args.depth,
                     "dropout": args.dropout,
+                    "layer_norm": args.layer_norm,
+                    "residual": args.residual,
                     "val_loss": val_loss,
                     "epochs": EPOCHS,
                     "batch_size": BATCH_SIZE,

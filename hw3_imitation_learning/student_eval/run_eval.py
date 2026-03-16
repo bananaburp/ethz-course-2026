@@ -3,7 +3,7 @@
 
 Usage
 -----
-    python student_eval/run_eval.py --exercise 1 --checkpoint ./checkpoints/single_cube/best_model_ee_full_obstacle.pt
+    python student_eval/run_eval.py --exercise 1 --checkpoint ./checkpoints/single_cube/best_model_ee_xyz_obstacle.pt
     python student_eval/run_eval.py --exercise 2 --checkpoint ./checkpoints/single_cube/best_model_ee_full_obstacle.pt
     python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multicube/best_model_multicube.pt
 
