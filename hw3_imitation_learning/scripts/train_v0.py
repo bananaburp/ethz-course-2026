@@ -13,7 +13,7 @@ Usage (obstacle policy, EE action space — recommended for ex1/ex2):
         --zarr datasets/processed/single_cube/processed_ee_xyz.zarr \
         --state-keys state_ee_xyz state_gripper "state_cube[:5]"  \
         --action-keys action_ee_xyz action_gripper \
-        --policy obstacle --chunk-size 8
+        --policy obstacle --chunk-size 8 --depth 3 --d-model 256
 
 Optional flags:
     --chunk-size 8      action chunk horizon H (default: 16)
@@ -51,7 +51,7 @@ from torch.utils.data import DataLoader
 EPOCHS = 200
 BATCH_SIZE = 64
 LR = 1e-3
-VAL_SPLIT = 0.1
+VAL_SPLIT = 0.15
 
 
 def train_one_epoch(

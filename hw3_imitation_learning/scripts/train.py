@@ -3,10 +3,12 @@
 Imports a model from hw3.model and trains it on
 state -> action-chunk prediction using the processed zarr dataset.
 
-Usage:
-    python scripts/train.py --zarr datasets/processed/single_cube/processed_ee_xyz.zarr \
-        --state-keys ... \
-        --action-keys ...
+Usage:  
+    python scripts/train.py \
+    --zarr datasets/processed/single_cube/processed_ee_xyz.zarr \
+    --state-keys state_ee_xyz state_gripper "state_cube[:5]"  \
+    --action-keys action_ee_xyz action_gripper \
+    --policy obstacle --chunk-size 16 --d-model 256 --depth 3
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import torch
 import zarr as zarr_lib
 from hw3.dataset import (
@@ -28,10 +31,10 @@ from hw3.model import BasePolicy, build_policy
 from torch.utils.data import DataLoader, random_split
 
 # TODO: Choose your own hyperparameters!
-EPOCHS = ... 
-BATCH_SIZE = ...
-LR = ...
-VAL_SPLIT = 0.1
+EPOCHS = 100 
+BATCH_SIZE = 64
+LR = 1e-3
+VAL_SPLIT = 0.15
 
 
 def train_one_epoch(
@@ -48,7 +51,17 @@ def train_one_epoch(
         states, action_chunks = batch
         # TODO: Implement the training step for one batch here.
         # This mostly: Get states and action_chunks onto the correct device, compute the loss, and step the optimizer.
-
+        states = states.to(device)
+        action_chunks = action_chunks.to(device)
+        
+        optimizer.zero_grad()
+        loss = model.compute_loss(states, action_chunks)
+        loss.backward()
+        optimizer.step()
+        
+        total_loss += loss.item()
+        n_batches += 1
+        
     return total_loss / max(n_batches, 1)
 
 
@@ -65,6 +78,11 @@ def evaluate(
     for batch in loader:
         states, action_chunks = batch
         # TODO: Implement the evaluation step for one batch here.
+        states = states.to(device)
+        action_chunks = action_chunks.to(device)
+        loss = model.compute_loss(states, action_chunks)
+        total_loss += loss.item()
+        n_batches += 1
 
     return total_loss / max(n_batches, 1)
 
@@ -73,7 +91,27 @@ def main() -> None:
     # TODO: You may add any cli arguments that make life easier for you like learning rate etc.
     parser = argparse.ArgumentParser(description="Train action-chunking policy.")
     parser.add_argument(
+        "--d-model",
+        type=int,
+        default=256,
+        help="Transformer d_model dimension (default: 256).",
+    )
+    parser.add_argument(
+        "--depth",
+        type=int,
+        default=3,
+        help="Transformer depth (number of layers) (default: 3).",
+    )
+    parser.add_argument(
         "--zarr", type=Path, required=True, help="Path to processed .zarr store."
+    )
+    parser.add_argument(
+        "--extra-zarr",
+        nargs="*",
+        type=Path,
+        default=None,
+        dest="extra_zarr",
+        help="Additional zarr paths to merge.",
     )
     parser.add_argument(
         "--policy",
@@ -160,17 +198,22 @@ def main() -> None:
         state_dim=states.shape[1],
         action_dim=actions.shape[1],
         # TODO: build with your desired specifications
+        chunk_size=args.chunk_size,
+        d_model=args.d_model,
+        depth=args.depth,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {n_params:,}")
 
     # TODO: implement an optimizer and scheduler
-    # optimizer =
-    # scheduler =
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
     # ── training loop ─────────────────────────────────────────────────
     best_val = float("inf")
+    train_losses: list[float] = []
+    val_losses: list[float] = []
 
     # Derive action space tag from action keys (e.g. "ee_xyz", "joints")
     action_space = "unknown"
@@ -202,6 +245,9 @@ def main() -> None:
         val_loss = evaluate(model, val_loader, device)
         scheduler.step()
 
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+
         tag = ""
         if val_loss < best_val:
             best_val = val_loss
@@ -222,6 +268,8 @@ def main() -> None:
                     "action_keys": args.action_keys,
                     "state_dim": int(states.shape[1]),
                     "action_dim": int(actions.shape[1]),
+                    "d_model": args.d_model,
+                    "depth": args.depth,
                     "val_loss": val_loss,
                 },
                 save_path,
@@ -235,6 +283,29 @@ def main() -> None:
 
     print(f"\nBest val loss: {best_val:.6f}")
     print(f"Checkpoint: {save_path}")
+
+    # ── save loss CSV ──────────────────────────────────────────────────
+    csv_path = save_path.with_suffix(".csv")
+    with csv_path.open("w") as f:
+        f.write("epoch,train_loss,val_loss\n")
+        for i, (tl, vl) in enumerate(zip(train_losses, val_losses), start=1):
+            f.write(f"{i},{tl:.8f},{vl:.8f}\n")
+    print(f"Loss CSV:  {csv_path}")
+
+    # ── plot loss curves ───────────────────────────────────────────────
+    epochs_range = range(1, EPOCHS + 1)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(epochs_range, train_losses, label="train")
+    ax.plot(epochs_range, val_losses, label="val")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Loss")
+    ax.set_title(f"Training curves — {action_space} / {args.policy}")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plot_path = save_path.with_suffix(".png")
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Loss plot: {plot_path}")
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ Three action spaces are supported (chosen via --action-space):
 Gripper actions are stored as a separate ``action_gripper`` array in all modes.
 
 Usage examples:
-    python scripts/compute_actions.py --action-space ee --datasets-dir hw3_imitation_learning/datasets/raw/single_cube/teleop_rowla
+    python scripts/compute_actions.py --action-space ee --datasets-dir ./datasets/raw/single_cube/teleop_rowla
     python scripts/compute_actions.py --action-space ee_full
     python scripts/compute_actions.py --action-space joints
     python scripts/compute_actions.py --action-space joints --datasets-dir ./datasets/raw/multi_cube
@@ -303,7 +303,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # ── discover zarr stores ──────────────────────────────────────────
-    zarr_paths = sorted(args.datasets_dir.rglob("*.zarr"))
+    zarr_paths = sorted(p for p in args.datasets_dir.rglob("*.zarr") if not p.name.startswith("._"))
     if not zarr_paths:
         print(f"No .zarr stores found under {args.datasets_dir}")
         return
