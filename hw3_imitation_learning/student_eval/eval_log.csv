@@ -1,0 +1,2 @@
+timestamp,exercise,num_episodes,success_rate,score,policy_type,chunk_size,d_model,depth,dropout,state_dim,action_dim,best_epoch,best_val_loss,epochs,batch_size,lr,val_split
+2026-03-16T17:32:52,1,100,0.74,60.0,obstacle,16,512,4,0.1,9,4,198,0.4919121265411377,200,64,0.001,0.3

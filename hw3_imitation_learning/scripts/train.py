@@ -8,7 +8,7 @@ Usage:
     --zarr datasets/processed/single_cube/processed_ee_xyz.zarr \
     --state-keys state_ee_xyz state_gripper "state_cube[:5]"  \
     --action-keys action_ee_xyz action_gripper \
-    --policy obstacle --chunk-size 16 --d-model 256 --depth 3
+    --policy obstacle --chunk-size 16 --d-model 512 --depth 4
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import zarr as zarr_lib
 from hw3.dataset import (
     Normalizer,
     SO100ChunkDataset,
+    episode_train_val_split,
     load_and_merge_zarrs,
     load_zarr,
 )
@@ -31,10 +32,10 @@ from hw3.model import BasePolicy, build_policy
 from torch.utils.data import DataLoader, random_split
 
 # TODO: Choose your own hyperparameters!
-EPOCHS = 100 
+EPOCHS = 200 
 BATCH_SIZE = 64
 LR = 1e-3
-VAL_SPLIT = 0.15
+VAL_SPLIT = 0.3
 
 
 def train_one_epoch(
@@ -141,6 +142,18 @@ def main() -> None:
         "Supports column slicing with [:N], [M:], [M:N]. "
         "If omitted, uses the action_key attribute from the zarr metadata.",
     )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.1,
+        help="Dropout probability after each hidden ReLU (default: 0.1). Set to 0 to disable.",
+    )
+    parser.add_argument(
+        "--episode-split",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Split by whole episodes (default). Use --no-episode-split for random timestep split.",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     args = parser.parse_args()
 
@@ -168,22 +181,22 @@ def main() -> None:
         )
     normalizer = Normalizer.from_data(states, actions)
 
-    dataset = SO100ChunkDataset(
-        states,
-        actions,
-        ep_ends,
-        chunk_size=args.chunk_size,
-        normalizer=normalizer,
-    )
-    print(f"Dataset: {len(dataset)} samples, chunk_size={args.chunk_size}")
     print(f"  state_dim={states.shape[1]}, action_dim={actions.shape[1]}")
 
     # ── train / val split ─────────────────────────────────────────────
-    n_val = max(1, int(len(dataset) * VAL_SPLIT))
-    n_train = len(dataset) - n_val
-    train_ds, val_ds = random_split(
-        dataset, [n_train, n_val], generator=torch.Generator().manual_seed(args.seed)
-    )
+    if args.episode_split:
+        (tr_states, tr_actions, tr_ends), (va_states, va_actions, va_ends) = (
+            episode_train_val_split(states, actions, ep_ends, val_ratio=VAL_SPLIT, seed=args.seed)
+        )
+        train_ds = SO100ChunkDataset(tr_states, tr_actions, tr_ends, chunk_size=args.chunk_size, normalizer=normalizer)
+        val_ds   = SO100ChunkDataset(va_states, va_actions, va_ends, chunk_size=args.chunk_size, normalizer=normalizer)
+    else:
+        full_ds = SO100ChunkDataset(states, actions, ep_ends, chunk_size=args.chunk_size, normalizer=normalizer)
+        n_val = max(1, int(len(full_ds) * VAL_SPLIT))
+        train_ds, val_ds = random_split(
+            full_ds, [len(full_ds) - n_val, n_val], generator=torch.Generator().manual_seed(args.seed)
+        )
+    print(f"Dataset: {len(train_ds)} train / {len(val_ds)} val samples, chunk_size={args.chunk_size}")
 
     train_loader = DataLoader(
         train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0
@@ -201,13 +214,14 @@ def main() -> None:
         chunk_size=args.chunk_size,
         d_model=args.d_model,
         depth=args.depth,
+        dropout=args.dropout,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {n_params:,}")
 
     # TODO: implement an optimizer and scheduler
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
     # ── training loop ─────────────────────────────────────────────────
@@ -270,7 +284,12 @@ def main() -> None:
                     "action_dim": int(actions.shape[1]),
                     "d_model": args.d_model,
                     "depth": args.depth,
+                    "dropout": args.dropout,
                     "val_loss": val_loss,
+                    "epochs": EPOCHS,
+                    "batch_size": BATCH_SIZE,
+                    "lr": LR,
+                    "val_split": VAL_SPLIT,
                 },
                 save_path,
             )

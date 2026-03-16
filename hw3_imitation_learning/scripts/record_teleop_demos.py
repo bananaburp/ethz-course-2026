@@ -1,3 +1,9 @@
+'''
+python scripts/record_teleop_demos.py
+'''
+
+
+
 from __future__ import annotations
 
 import argparse

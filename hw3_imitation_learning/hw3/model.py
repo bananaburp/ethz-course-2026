@@ -47,12 +47,14 @@ class ObstaclePolicy(BasePolicy):
         chunk_size: int,
         d_model: int = 128,
         depth: int = 2,
+        dropout: float = 0.0,
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
         self.d_model = d_model
         self.depth = depth
         output_dim = chunk_size * action_dim
 
+        self.dropout_p = dropout
         layers: list[nn.Module] = [nn.Linear(state_dim, d_model), nn.ReLU()]
         for _ in range(depth - 1):
             layers += [nn.Linear(d_model, d_model), nn.ReLU()]
@@ -61,8 +63,12 @@ class ObstaclePolicy(BasePolicy):
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
-        flat = self.net(state)
-        return flat.view(flat.size(0), self.chunk_size, self.action_dim)
+        x = state
+        for layer in self.net:
+            x = layer(x)
+            if self.training and self.dropout_p > 0.0 and isinstance(layer, nn.ReLU):
+                x = F.dropout(x, p=self.dropout_p, training=True)
+        return x.view(x.size(0), self.chunk_size, self.action_dim)
 
     def compute_loss(
         self, state: torch.Tensor, action_chunk: torch.Tensor
@@ -119,6 +125,7 @@ def build_policy(
     chunk_size: int = 16,
     d_model: int = 128,
     depth: int = 2,
+    dropout: float = 0.0,
 ) -> BasePolicy:
     if policy_type == "obstacle":
         return ObstaclePolicy(
@@ -127,6 +134,7 @@ def build_policy(
             chunk_size=chunk_size,
             d_model=d_model,
             depth=depth,
+            dropout=dropout,
         )
     if policy_type == "multitask":
         return MultiTaskPolicy(
