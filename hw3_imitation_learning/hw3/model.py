@@ -6,6 +6,7 @@ import abc
 from typing import Literal, TypeAlias
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 
@@ -32,7 +33,6 @@ class BasePolicy(nn.Module, metaclass=abc.ABCMeta):
         """Generate a chunk of actions with shape (batch, chunk_size, action_dim)."""
 
 
-# TODO: Students implement ObstaclePolicy here.
 class ObstaclePolicy(BasePolicy):
     """Predicts action chunks with an MSE loss.
 
@@ -42,25 +42,39 @@ class ObstaclePolicy(BasePolicy):
 
     def __init__(
         self,
+        state_dim: int,
+        action_dim: int,
+        chunk_size: int,
+        d_model: int = 128,
+        depth: int = 2,
     ) -> None:
-        super().__init__()
+        super().__init__(state_dim, action_dim, chunk_size)
+        self.d_model = d_model
+        self.depth = depth
+        output_dim = chunk_size * action_dim
 
-    def forward(
-        self,
-    ) -> torch.Tensor:
+        layers: list[nn.Module] = [nn.Linear(state_dim, d_model), nn.ReLU()]
+        for _ in range(depth - 1):
+            layers += [nn.Linear(d_model, d_model), nn.ReLU()]
+        layers.append(nn.Linear(d_model, output_dim))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
-        raise NotImplementedError
+        flat = self.net(state)
+        return flat.view(flat.size(0), self.chunk_size, self.action_dim)
 
     def compute_loss(
-        self,
+        self, state: torch.Tensor, action_chunk: torch.Tensor
     ) -> torch.Tensor:
-        raise NotImplementedError
+        pred = self.forward(state)
+        return F.mse_loss(pred, action_chunk)
 
     def sample_actions(
         self,
         state: torch.Tensor,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        return self.forward(state)
 
 
 # TODO: Students implement MultiTaskPolicy here.
@@ -69,8 +83,13 @@ class MultiTaskPolicy(BasePolicy):
 
     def __init__(
         self,
+        state_dim: int,
+        action_dim: int,
+        chunk_size: int,
+        d_model: int = 128,
+        depth: int = 2,
     ) -> None:
-        super().__init__()
+        super().__init__(state_dim, action_dim, chunk_size)
 
     def compute_loss(
         self,
@@ -97,17 +116,24 @@ def build_policy(
     *,
     state_dim: int,
     action_dim: int,
+    chunk_size: int = 16,
+    d_model: int = 128,
+    depth: int = 2,
 ) -> BasePolicy:
     if policy_type == "obstacle":
         return ObstaclePolicy(
-            action_dim=action_dim,
             state_dim=state_dim,
-            # TODO: Build with your chosen specifications
+            action_dim=action_dim,
+            chunk_size=chunk_size,
+            d_model=d_model,
+            depth=depth,
         )
     if policy_type == "multitask":
         return MultiTaskPolicy(
-            action_dim=action_dim,
             state_dim=state_dim,
-            # TODO: Build with your chosen specifications
+            action_dim=action_dim,
+            chunk_size=chunk_size,
+            d_model=d_model,
+            depth=depth,
         )
     raise ValueError(f"Unknown policy type: {policy_type}")

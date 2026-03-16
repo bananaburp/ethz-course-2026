@@ -92,7 +92,7 @@ Run the `eval.py` script pointing the `--checkpoint` flag at your trained checkp
 #### Deliverable
 When you're confident about your model performance you can run 
 ```bash
-python student_eval/run_eval --exercise 1 --checkpoint <path to your ckpt>
+python student_eval/run_eval.py --exercise 1 --checkpoint checkpoints/single_cube/best_model_ee_xyz_obstacle.pt
 ```
 This will produce a file named ex1_result.hwresult which you can submit to the autograder on gradescope. Do NOT modify this file as we will verify your performance reported to gradescope using your model definition and checkpoint as well and if we notice tampering we will have to administer a failing grade.
 For this please also submit your `model.py` and your best checkpoint `.pt` file to the autograder. Please name the checkpoint file `ex1.pt`. Please don't change the name of the `ObstaclePolicy` class as this is imported by the autograder. Make sure the policy default construction arguments are also the ones you trained your checkpoint with so we can reproduce your model in our eval suite.

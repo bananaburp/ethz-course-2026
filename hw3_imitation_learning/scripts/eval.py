@@ -2,6 +2,12 @@
 
 Supports both single-cube and multicube scenes. Use --multicube to run the
 multicube goal-conditioned setup.
+
+Usage:
+    python scripts/eval.py \
+        --checkpoint checkpoints/single_cube/best_model_ee_xyz_obstacle.pt \
+        --num-episodes 20 \
+        --headless \
 """
 
 from __future__ import annotations

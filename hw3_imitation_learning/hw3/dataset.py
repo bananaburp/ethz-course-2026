@@ -155,6 +155,87 @@ def load_and_merge_zarrs(
     return merged_states, merged_actions, merged_ep_ends
 
 
+def audit_zarr_keys(
+    zarr_path: Path,
+    state_keys: list[str] | None,
+    action_keys: list[str] | None,
+) -> None:
+    """Print available state/action arrays in a zarr and warn about unused ones."""
+    root = zarr.open_group(str(zarr_path), mode="r")
+    available = sorted(root["data"].keys())
+    used = set()
+    if state_keys:
+        used.update(_parse_key_spec(k)[0] for k in state_keys)
+    if action_keys:
+        used.update(_parse_key_spec(k)[0] for k in action_keys)
+
+    state_avail = [k for k in available if k.startswith("state_")]
+    action_avail = [k for k in available if k.startswith("action_")]
+    unused_state = [k for k in state_avail if k not in used]
+    unused_action = [k for k in action_avail if k not in used]
+
+    print(f"Zarr key audit ({zarr_path.name}):")
+    print(f"  available state  arrays: {state_avail}")
+    print(f"  available action arrays: {action_avail}")
+    print(f"  used keys: {sorted(used)}")
+    if unused_state:
+        print(f"  WARNING: unused state  arrays: {unused_state}")
+    if unused_action:
+        print(f"  WARNING: unused action arrays: {unused_action}")
+
+
+def episode_train_val_split(
+    states: np.ndarray,
+    actions: np.ndarray,
+    episode_ends: np.ndarray,
+    val_ratio: float = 0.1,
+    seed: int = 42,
+) -> tuple[
+    tuple[np.ndarray, np.ndarray, np.ndarray],
+    tuple[np.ndarray, np.ndarray, np.ndarray],
+]:
+    """Split data into train/val by whole episodes (no episode bleeds across splits).
+
+    Episodes are shuffled then divided so the last ``val_ratio`` fraction of the
+    shuffled list becomes validation.  Episode-end indices in each returned split
+    are renumbered to be locally correct.
+
+    Returns:
+        (train_states, train_actions, train_ep_ends),
+        (val_states,   val_actions,   val_ep_ends)
+    """
+    n_episodes = len(episode_ends)
+    n_val = max(1, int(n_episodes * val_ratio))
+
+    rng = np.random.default_rng(seed)
+    shuffled = rng.permutation(n_episodes)
+    train_idx = sorted(shuffled[n_val:].tolist())
+    val_idx = sorted(shuffled[:n_val].tolist())
+
+    starts = np.concatenate(([0], episode_ends[:-1]))
+
+    def _extract(
+        indices: list[int],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        state_parts: list[np.ndarray] = []
+        action_parts: list[np.ndarray] = []
+        new_ends: list[int] = []
+        offset = 0
+        for i in indices:
+            s, e = int(starts[i]), int(episode_ends[i])
+            state_parts.append(states[s:e])
+            action_parts.append(actions[s:e])
+            offset += e - s
+            new_ends.append(offset)
+        return (
+            np.concatenate(state_parts, axis=0),
+            np.concatenate(action_parts, axis=0),
+            np.asarray(new_ends, dtype=np.int64),
+        )
+
+    return _extract(train_idx), _extract(val_idx)
+
+
 def build_valid_indices(episode_ends: np.ndarray, chunk_size: int) -> np.ndarray:
     """Return flat indices where a full action chunk of length ``chunk_size`` fits.
 

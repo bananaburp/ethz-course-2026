@@ -10,14 +10,14 @@ control input not the state.
 
 Three action spaces are supported (chosen via --action-space):
 
-  ee       - EE xyz position delta (3-dim)
-  ee_full  - EE full pose delta: delta_pos(3) + delta_euler(3) (6-dim)
-  joints   - Joint angle deltas excluding Jaw (5-dim)
+    ee       - EE xyz position delta (3-dim)
+    ee_full  - EE full pose delta: delta_pos(3) + delta_euler(3) (6-dim)
+    joints   - Joint angle deltas excluding Jaw (5-dim)
 
 Gripper actions are stored as a separate ``action_gripper`` array in all modes.
 
 Usage examples:
-    python scripts/compute_actions.py --action-space ee
+    python scripts/compute_actions.py --action-space ee --datasets-dir hw3_imitation_learning/datasets/raw/single_cube/teleop_rowla
     python scripts/compute_actions.py --action-space ee_full
     python scripts/compute_actions.py --action-space joints
     python scripts/compute_actions.py --action-space joints --datasets-dir ./datasets/raw/multi_cube
