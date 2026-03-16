@@ -9,6 +9,12 @@ Usage:
     --state-keys state_ee_xyz state_gripper "state_cube[:5]"  \
     --action-keys action_ee_xyz action_gripper \
     --policy obstacle --chunk-size 16 --d-model 512 --depth 4
+    
+    python scripts/train.py \
+        --zarr datasets/processed/single_cube/processed_ee_full.zarr \
+        --state-keys state_ee_full state_gripper "state_cube[:5]"  \
+        --action-keys action_ee_full action_gripper \
+        --policy obstacle --chunk-size 16 --d-model 512 --depth 4
 """
 
 from __future__ import annotations

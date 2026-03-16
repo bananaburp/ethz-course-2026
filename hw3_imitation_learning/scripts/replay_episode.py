@@ -2,6 +2,10 @@
 
 Usage:
     python scripts/replay_episode.py --zarr <path_to.zarr> [--episode 0] [--speed 1.0]
+    
+    python scripts/replay_episode.py \
+        --zarr ./datasets/raw/single_cube/teleop_rowla/2026-03-16_12-41-58/so100_transfer_cube_teleop.zarr \
+        --speed 2.5
 
 Controls:
     SPACE   pause / resume

@@ -3,7 +3,6 @@ python scripts/record_teleop_demos.py
 '''
 
 
-
 from __future__ import annotations
 
 import argparse
@@ -32,13 +31,10 @@ from hw3.teleop_utils import (
     CUBE_JOINT_NAME,
     JOINT_NAMES,
     OBSTACLE_DIM,
-    GamepadPoller,
     ZarrEpisodeWriter,
-    apply_scaled_teleop_action,
     compose_camera_views,
     handle_teleop_key,
     load_keymap,
-    probe_gamepad,
 )
 from so101_gym.constants import ASSETS_DIR
 
@@ -62,8 +58,6 @@ class BaseCv2TeleopRecorder:
         render_h: int,
         window_name: str,
         keymap_path: Path | None,
-        use_gamepad: bool = False,
-        gamepad_map_path: Path | None = None,
     ) -> None:
         self.model = mujoco.MjModel.from_xml_path(str(xml_path))
         self.data = mujoco.MjData(self.model)
@@ -120,10 +114,6 @@ class BaseCv2TeleopRecorder:
         self._key_to_action = load_keymap(keymap_path)
         print(f"Loaded key mapping from {keymap_path or 'default'}")
 
-        self._gamepad: GamepadPoller | None = None
-        if use_gamepad:
-            self._gamepad = GamepadPoller(map_path=gamepad_map_path)
-
     def _build_writer(
         self,
         xml_path: Path,
@@ -135,13 +125,8 @@ class BaseCv2TeleopRecorder:
     def _reset_episode(self) -> None:
         raise NotImplementedError
 
-    def _dispatch_action(self, action: str) -> None:
+    def _handle_key(self, k_raw: int, k_ascii: int) -> None:
         raise NotImplementedError
-
-    def _handle_key(self, k_raw: int, _k_ascii: int) -> None:
-        action = self._key_to_action.get(k_raw)
-        if action is not None:
-            self._dispatch_action(action)
 
     def _record_step(self) -> None:
         raise NotImplementedError
@@ -219,24 +204,10 @@ class BaseCv2TeleopRecorder:
         last = time.perf_counter()
         try:
             while self.running:
-                # ── keyboard input ─────────────────────────────────────
                 k_raw = cv2.waitKeyEx(1)
                 if k_raw != -1:
-                    self._handle_key(k_raw, k_raw & 0xFF)
-
-                # ── gamepad input ──────────────────────────────────────
-                if self._gamepad is not None:
-                    for btn_action in self._gamepad.poll_button_events():
-                        self._dispatch_action(btn_action)
-                    for axis_action, scale in self._gamepad.poll_analog_actions():
-                        apply_scaled_teleop_action(
-                            axis_action,
-                            self.data,
-                            self.model,
-                            MOCAP_INDEX,
-                            self.act_id["Jaw"],
-                            scale,
-                        )
+                    k_ascii = k_raw & 0xFF
+                    self._handle_key(k_raw, k_ascii)
 
                 now = time.perf_counter()
                 dt = now - last
@@ -254,8 +225,6 @@ class BaseCv2TeleopRecorder:
                 cv2.imshow(self.window_name, img)
         finally:
             self._finalize_on_exit()
-            if self._gamepad is not None:
-                self._gamepad.close()
             self.writer.flush()
             cv2.destroyAllWindows()
             print(f"Flushed buffers. {self.episodes_done} episode(s) saved. Done.")
@@ -273,8 +242,6 @@ class SO100Cv2TeleopRecorder(BaseCv2TeleopRecorder):
         keymap_path: Path | None = None,
         cube_pos_std: float = DEFAULT_CUBE_POS_STD,
         obstacle_pos_std: float = DEFAULT_OBSTACLE_POS_STD,
-        use_gamepad: bool = False,
-        gamepad_map_path: Path | None = None,
     ) -> None:
         self.cube_pos_std = cube_pos_std
         self.obstacle_pos_std = obstacle_pos_std
@@ -286,8 +253,6 @@ class SO100Cv2TeleopRecorder(BaseCv2TeleopRecorder):
             render_h=render_h,
             window_name=window_name,
             keymap_path=keymap_path,
-            use_gamepad=use_gamepad,
-            gamepad_map_path=gamepad_map_path,
         )
 
         cube_jnt_id = mujoco.mj_name2id(
@@ -368,7 +333,9 @@ class SO100Cv2TeleopRecorder(BaseCv2TeleopRecorder):
         mujoco.mj_forward(self.model, self.data)
         self._init_pose_and_targets()
 
-    def _dispatch_action(self, action: str) -> None:
+    def _handle_key(self, k_raw: int, _k_ascii: int) -> None:
+        action = self._key_to_action.get(k_raw)
+
         if action == "escape":
             if self.recording:
                 self.writer.end_episode()
@@ -400,6 +367,9 @@ class SO100Cv2TeleopRecorder(BaseCv2TeleopRecorder):
                     "Episode DISCARDED. Press your record key to start a new recording."
                 )
             self._reset_episode()
+            return
+
+        if action is None:
             return
 
         handle_teleop_key(
@@ -607,8 +577,6 @@ class MulticubeTeleopRecorder(BaseCv2TeleopRecorder):
         keymap_path: Path | None = None,
         seed: int | None = None,
         cube_pos_std: float = DEFAULT_CUBE_POS_STD,
-        use_gamepad: bool = False,
-        gamepad_map_path: Path | None = None,
     ) -> None:
         self.rng = np.random.default_rng(seed)
         self.cube_pos_std = cube_pos_std
@@ -621,8 +589,6 @@ class MulticubeTeleopRecorder(BaseCv2TeleopRecorder):
             render_h=render_h,
             window_name=window_name,
             keymap_path=keymap_path,
-            use_gamepad=use_gamepad,
-            gamepad_map_path=gamepad_map_path,
         )
 
         self.cube_qpos_slices: list[np.ndarray] = []
@@ -756,7 +722,11 @@ class MulticubeTeleopRecorder(BaseCv2TeleopRecorder):
         mujoco.mj_forward(self.model, self.data)
         self._init_pose_and_targets()
 
-    def _dispatch_action(self, action: str) -> None:
+    def _handle_key(self, k_raw: int, _k_ascii: int) -> None:
+        action = self._key_to_action.get(k_raw)
+        if action is None:
+            return
+
         if action in ("goal_cube_red", "goal_cube_green", "goal_cube_blue"):
             if self.recording:
                 print("  Cannot change goal cube while recording!")
@@ -886,28 +856,7 @@ def main() -> None:
         default=None,
         help="Random seed for reproducible multicube shuffling.",
     )
-    parser.add_argument(
-        "--gamepad",
-        action="store_true",
-        help="Enable PS5 DualSense (or generic HID gamepad) control via pygame.",
-    )
-    parser.add_argument(
-        "--gamepad-map",
-        type=Path,
-        default=None,
-        metavar="PATH",
-        help="Path to a gamepad button-map JSON file (default: hw3/gamepad.json).",
-    )
-    parser.add_argument(
-        "--probe-gamepad",
-        action="store_true",
-        help="Print live button/axis indices from the connected gamepad and exit.",
-    )
     args = parser.parse_args()
-
-    if args.probe_gamepad:
-        probe_gamepad()
-        return
 
     ts = datetime.now(ZoneInfo("Europe/Berlin")).strftime("%Y-%m-%d_%H-%M-%S")
 
@@ -921,8 +870,6 @@ def main() -> None:
             out_zarr=out,
             control_hz=10.0,
             seed=args.seed,
-            use_gamepad=args.gamepad,
-            gamepad_map_path=args.gamepad_map,
         ).run()
         return
 
@@ -936,8 +883,6 @@ def main() -> None:
         control_hz=10.0,
         render_w=640,
         render_h=480,
-        use_gamepad=args.gamepad,
-        gamepad_map_path=args.gamepad_map,
     ).run()
 
 

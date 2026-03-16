@@ -3,9 +3,9 @@
 
 Usage
 -----
-    python run_eval.py --exercise 1 --checkpoint ex1.pt
-    python run_eval.py --exercise 2 --checkpoint ex2.pt
-    python run_eval.py --exercise 3 --checkpoint ex3.pt
+    python student_eval/run_eval.py --exercise 1 --checkpoint ./checkpoints/single_cube/best_model_ee_full_obstacle.pt
+    python student_eval/run_eval.py --exercise 2 --checkpoint ./checkpoints/single_cube/best_model_ee_full_obstacle.pt
+    python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multicube/best_model_multicube.pt
 
 The script expects your ``model.py`` at ``hw3/model.py`` relative to the
 project root (i.e. the parent directory of ``student_eval/``).
