@@ -5,8 +5,15 @@ multicube goal-conditioned setup.
 
 Usage:
     python scripts/eval.py \
-        --checkpoint checkpoints/single_cube/best_model_ee_xyz_obstacle.pt \
+        --checkpoint ./checkpoints/single_cube/best_model_ee_xyz_obstacle_dagger19ep.pt \
         --adversarial-obstacle --headless
+        
+    python scripts/eval.py \
+    --checkpoint ./checkpoints/single_cube/best_model_ee_xyz_obstacle.pt \
+    --multicube \
+    --goal-cube red \
+    --num-episodes 30 \
+    --headless
         
 """
 
@@ -169,7 +176,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a trained policy in simulation.")
     parser.add_argument("--checkpoint", type=Path, required=True, help="Path to the model checkpoint (.pt).")
     parser.add_argument("--multicube", action="store_true", help="Evaluate in multicube scene.")
-    parser.add_argument("--num-episodes", type=int, default=10, help="Number of evaluation episodes (default: 10).")
+    parser.add_argument("--num-episodes", type=int, default=100, help="Number of evaluation episodes (default: 10).")
     parser.add_argument("--max-steps", type=int, default=800, help="Maximum steps per episode (default: 800).")
     parser.add_argument("--headless", action="store_true", help="Run without rendering.")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible cube spawns.")

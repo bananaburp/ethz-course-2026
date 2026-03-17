@@ -10,8 +10,8 @@ later be merged with the original demonstrations for retraining via
 compute_actions.py which will produce a merged .zarr dataset to train on.
 
 Usage:
-    python scripts/dagger_eval.py \\
-        --checkpoint checkpoints/single_cube/best_model_ee_xyz_obstacle.pt \\
+    python scripts/dagger_eval.py \
+        --checkpoint checkpoints/single_cube/best_model_ee_xyz_obstacle_dagger14ep.pt \
         --num-episodes 10
 """
 
@@ -48,6 +48,8 @@ from hw3.teleop_utils import (
 from so101_gym.constants import ASSETS_DIR
 
 XML_PATH = ASSETS_DIR / "so100_transfer_cube_obstacle_ee.xml"
+
+# _DAGGER_CAMERA_NAMES = CAMERA_NAMES + ("front_close",)
 
 
 # ── main DAgger loop ─────────────────────────────────────────────────

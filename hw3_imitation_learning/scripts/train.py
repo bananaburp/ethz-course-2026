@@ -4,18 +4,22 @@ Imports a model from hw3.model and trains it on
 state -> action-chunk prediction using the processed zarr dataset.
 
 Usage:  
+
     python scripts/train.py \
-    --zarr datasets/processed/single_cube/processed_ee_xyz.zarr \
-    --state-keys state_ee_xyz state_gripper "state_cube[:5]"  \
-    --action-keys action_ee_xyz action_gripper \
-    --policy obstacle --chunk-size 16 --d-model 512 --depth 4 \
-    --layer-norm --residual
-    
+        --zarr datasets/processed/single_cube/processed_ee_xyz.zarr \
+        --state-keys state_ee_xyz state_gripper "state_cube[:5]" state_obstacle \
+        --action-keys action_ee_xyz action_gripper \
+        --policy obstacle --chunk-size 16 --d-model 384 --depth 4 --epochs 100 \
+        --layer-norm --residual
+
     python scripts/train.py \
-        --zarr datasets/processed/single_cube/processed_ee_full.zarr \
-        --state-keys state_ee_full state_gripper "state_cube[:5]"  \
-        --action-keys action_ee_full action_gripper \
-        --policy obstacle --chunk-size 16 --d-model 512 --depth 4
+        --zarr datasets/processed/multi_cube/processed_ee_xyz.zarr \
+        --state-keys state_ee_xyz state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
+        --action-keys action_ee_xyz action_gripper \
+        --policy multitask --chunk-size 16 --d-model 384 --depth 4 --epochs 100 \
+        --layer-norm --residual
+
+
 """
 
 from __future__ import annotations
@@ -39,10 +43,9 @@ from hw3.model import BasePolicy, build_policy
 from torch.utils.data import DataLoader, random_split
 
 # TODO: Choose your own hyperparameters!
-EPOCHS = 200 
 BATCH_SIZE = 64
 LR = 1e-3
-VAL_SPLIT = 0.3
+VAL_SPLIT = 0.15
 
 
 def train_one_epoch(
@@ -173,8 +176,15 @@ def main() -> None:
         default=False,
         help="Split by whole episodes (default). Use --no-episode-split for random timestep split.",
     )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=400,
+        help="Number of training epochs (default: 400).",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     args = parser.parse_args()
+    EPOCHS = args.epochs
 
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
