@@ -6,7 +6,10 @@ Usage
     python student_eval/run_eval.py --exercise 1 --checkpoint ./checkpoints/single_cube/best_model_ee_xyz_obstacle.pt
     python student_eval/run_eval.py --exercise 2 --checkpoint ./checkpoints/single_cube/best_model_ee_xyz_obstacle_dagger19ep.pt
     python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_multitask_dagger12ep.pt
+    
     python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_multitask.pt
+    python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_joints_multitask.pt
+    python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_full_multitask_dagger12ep.pt
 
 The script expects your ``model.py`` at ``hw3/model.py`` relative to the
 project root (i.e. the parent directory of ``student_eval/``).
@@ -248,6 +251,7 @@ def main() -> None:
         "chunk_size", "d_model", "depth", "dropout",
         "best_epoch", "best_val_loss",
         "epochs", "batch_size", "lr", "val_split",
+        "checkpoint",
     ]
     write_header = not log_path.exists()
     with log_path.open("a", newline="") as f:
@@ -269,6 +273,7 @@ def main() -> None:
             "batch_size": ckpt_meta.get("batch_size"),
             "lr": ckpt_meta.get("lr"),
             "val_split": ckpt_meta.get("val_split"),
+            "checkpoint": str(ckpt_path),
         })
     print(f"\n  Log appended : {log_path}")
 

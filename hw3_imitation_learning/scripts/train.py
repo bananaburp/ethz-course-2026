@@ -20,7 +20,17 @@ Usage:
         --rel-coords \
         --layer-norm --residual
 
+    python scripts/train.py \
+        --zarr datasets/processed/multi_cube/processed_ee_full.zarr \
+        --state-keys state_ee_full state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
+        --action-keys action_ee_full action_gripper \
+        --policy multitask --chunk-size 16 --d-model 512 --depth 4 --epochs 200
 
+    python scripts/train.py \
+        --zarr datasets/processed/multi_cube/processed_joints.zarr \
+        --state-keys state_joints state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
+        --action-keys action_joints action_gripper \
+        --policy multitask --chunk-size 16 --d-model 512 --depth 4 --epochs 200
 """
 
 from __future__ import annotations
