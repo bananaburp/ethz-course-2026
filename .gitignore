@@ -24,3 +24,6 @@ video_script.md
 .claude/
 
 hw3_imitation_learning/datasets
+hw3_imitation_learning/checkpoints/
+
+*.pt
