@@ -272,6 +272,69 @@ def audit_zarr_keys(
         print(f"  WARNING: unused action arrays: {unused_action}")
 
 
+def filter_episodes_by_goal(
+    states: np.ndarray,
+    actions: np.ndarray,
+    episode_ends: np.ndarray,
+    state_keys: list[str],
+    goal_color: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Keep only episodes whose goal one-hot matches *goal_color*.
+
+    Looks up the position of ``state_goal`` in the state vector from
+    *state_keys*, then checks the argmax of the one-hot at the first
+    timestep of each episode.
+
+    Raises ``ValueError`` if ``state_goal`` is absent from *state_keys*
+    or if no episodes match the requested color.
+    """
+    goal_colors = ("red", "green", "blue")
+    if goal_color not in goal_colors:
+        raise ValueError(f"goal_color must be one of {goal_colors}, got {goal_color!r}")
+    goal_idx = goal_colors.index(goal_color)
+
+    # Locate the state_goal slice in the flat state vector
+    pos = 0
+    goal_start: int | None = None
+    for spec in state_keys:
+        name, sl = _parse_key_spec(spec)
+        full_dim = _KEY_FULL_DIMS.get(name, 0)
+        seg_dim = len(np.arange(full_dim)[sl]) if full_dim > 0 else 0
+        if name == "state_goal":
+            goal_start = pos
+            break
+        pos += seg_dim
+
+    if goal_start is None:
+        raise ValueError(
+            "state_goal not found in state_keys — cannot filter by goal color. "
+            "Add state_goal to --state-keys."
+        )
+
+    starts = np.concatenate(([0], episode_ends[:-1]))
+    state_parts: list[np.ndarray] = []
+    action_parts: list[np.ndarray] = []
+    new_ends: list[int] = []
+    offset = 0
+    for s, e in zip(starts, episode_ends):
+        one_hot = states[s, goal_start : goal_start + 3]
+        if int(np.argmax(one_hot)) == goal_idx:
+            state_parts.append(states[s:e])
+            action_parts.append(actions[s:e])
+            offset += int(e) - int(s)
+            new_ends.append(offset)
+
+    if not state_parts:
+        raise ValueError(f"No episodes found for goal color '{goal_color}'.")
+
+    print(f"  Filtered to {len(new_ends)} episodes with goal='{goal_color}'.")
+    return (
+        np.concatenate(state_parts, axis=0),
+        np.concatenate(action_parts, axis=0),
+        np.asarray(new_ends, dtype=np.int64),
+    )
+
+
 def episode_train_val_split(
     states: np.ndarray,
     actions: np.ndarray,

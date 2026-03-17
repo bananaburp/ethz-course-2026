@@ -5,6 +5,7 @@ Usage
 -----
     python student_eval/run_eval.py --exercise 1 --checkpoint ./checkpoints/single_cube/best_model_ee_xyz_obstacle.pt
     python student_eval/run_eval.py --exercise 2 --checkpoint ./checkpoints/single_cube/best_model_ee_xyz_obstacle_dagger19ep.pt
+    python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_multitask_dagger12ep.pt
     python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_multitask.pt
 
 The script expects your ``model.py`` at ``hw3/model.py`` relative to the

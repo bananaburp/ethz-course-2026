@@ -12,7 +12,7 @@ Usage:
     --checkpoint ./checkpoints/single_cube/best_model_ee_xyz_obstacle.pt \
     --multicube \
     --goal-cube red \
-    --num-episodes 30 \
+    --num-episodes 35 \
     --headless
         
 """
@@ -174,7 +174,7 @@ def build_goal_schedule(goal_cube: str, num_episodes: int) -> list[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a trained policy in simulation.")
-    parser.add_argument("--checkpoint", type=Path, required=True, help="Path to the model checkpoint (.pt).")
+    parser.add_argument("--checkpoint", type=Path, default=None, help="Path to model checkpoint (.pt). Used as fallback for any colour not covered by per-colour args.")
     parser.add_argument("--multicube", action="store_true", help="Evaluate in multicube scene.")
     parser.add_argument("--num-episodes", type=int, default=100, help="Number of evaluation episodes (default: 10).")
     parser.add_argument("--max-steps", type=int, default=800, help="Maximum steps per episode (default: 800).")
@@ -188,6 +188,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--goal-cube", type=str, default="all", choices=["red", "green", "blue", "all"], help="Goal colour for multicube ('all' cycles evenly).")
     parser.add_argument("--no-shuffle", action="store_true", help="Disable multicube slot shuffling.")
 
+    # per-colour checkpoints (multicube only)
+    parser.add_argument("--checkpoint-red",   type=Path, default=None, help="Checkpoint for the red-goal policy.")
+    parser.add_argument("--checkpoint-green", type=Path, default=None, help="Checkpoint for the green-goal policy.")
+    parser.add_argument("--checkpoint-blue",  type=Path, default=None, help="Checkpoint for the blue-goal policy.")
+
     return parser.parse_args()
 
 
@@ -197,12 +202,44 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    model, normalizer, _chunk_size, state_keys, action_keys = load_checkpoint(
-        args.checkpoint,
-        device,
-    )
+    # ── build per-colour model table ──────────────────────────────────
+    color_ckpts: dict[str, Path | None] = {
+        "red":   args.checkpoint_red,
+        "green": args.checkpoint_green,
+        "blue":  args.checkpoint_blue,
+    }
+    per_color_mode = any(v is not None for v in color_ckpts.values())
 
-    use_mocap = not any("action_joints" in k for k in action_keys)
+    if not per_color_mode and args.checkpoint is None:
+        raise SystemExit("error: --checkpoint is required unless per-colour checkpoints are provided.")
+
+    # Load the shared / fallback checkpoint (may be None in strict per-color mode)
+    shared: tuple | None = None
+    if args.checkpoint is not None:
+        shared = load_checkpoint(args.checkpoint, device)
+
+    # Per-colour entries: specific checkpoint if given, else fall back to shared
+    ColorEntry = tuple  # (model, normalizer, chunk_size, state_keys, action_keys)
+    color_models: dict[str, ColorEntry] = {}
+    if per_color_mode:
+        for color, ckpt_path in color_ckpts.items():
+            if ckpt_path is not None:
+                color_models[color] = load_checkpoint(ckpt_path, device)
+                print(f"  Loaded {color} checkpoint: {ckpt_path}")
+            elif shared is not None:
+                color_models[color] = shared
+                print(f"  {color}: falling back to shared checkpoint")
+            else:
+                raise SystemExit(f"error: no checkpoint for color '{color}' and no --checkpoint fallback.")
+
+    # Derive use_mocap from whichever entry we have
+    ref_entry = color_models.get("red") or shared
+    _, _, _, _, ref_action_keys = ref_entry
+    use_mocap = not any("action_joints" in k for k in ref_action_keys)
+
+    # In non-per-color mode, unpack the single shared tuple
+    if not per_color_mode:
+        model, normalizer, _chunk_size, state_keys, action_keys = shared
 
     if args.multicube:
         goal_schedule = build_goal_schedule(args.goal_cube, args.num_episodes)
@@ -232,9 +269,9 @@ def main() -> None:
         )
 
     successes = 0
-    per_color: dict[str, dict[str, int]] | None = None
+    per_color_stats: dict[str, dict[str, int]] | None = None
     if args.multicube:
-        per_color = {c: {"success": 0, "total": 0} for c in CUBE_COLORS}
+        per_color_stats = {c: {"success": 0, "total": 0} for c in CUBE_COLORS}
 
     episodes_run = 0
     try:
@@ -243,6 +280,9 @@ def main() -> None:
                 goal = goal_schedule[ep - 1]
                 env.set_goal(goal)
                 print(f"\n═══ Episode {ep}/{args.num_episodes}  (goal: {goal}) ═══")
+                # Select the right model for this goal colour
+                if per_color_mode:
+                    model, normalizer, _chunk_size, state_keys, action_keys = color_models[goal]
             else:
                 print(f"\n═══ Episode {ep}/{args.num_episodes} ═══")
 
@@ -268,11 +308,11 @@ def main() -> None:
                 successes += 1
 
             if args.multicube:
-                assert per_color is not None
+                assert per_color_stats is not None
                 goal = goal_schedule[ep - 1]
-                per_color[goal]["total"] += 1
+                per_color_stats[goal]["total"] += 1
                 if success:
-                    per_color[goal]["success"] += 1
+                    per_color_stats[goal]["success"] += 1
 
             rate = successes / ep * 100
             result = "SUCCESS" if success else "FAIL"
@@ -286,11 +326,11 @@ def main() -> None:
     denom = max(episodes_run, 1)
     print(f"\nEvaluation complete. Success rate: {successes}/{denom} ({successes / denom * 100:.0f}%)")
 
-    if args.multicube and per_color is not None:
+    if args.multicube and per_color_stats is not None:
         print(f"{'═' * 50}")
         for c in CUBE_COLORS:
-            s = per_color[c]["success"]
-            t = per_color[c]["total"]
+            s = per_color_stats[c]["success"]
+            t = per_color_stats[c]["total"]
             r = s / t * 100 if t > 0 else 0
             print(f"  {c:6s}: {s}/{t} ({r:.0f}%)")
 

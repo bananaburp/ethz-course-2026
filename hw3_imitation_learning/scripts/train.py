@@ -16,7 +16,7 @@ Usage:
         --zarr datasets/processed/multi_cube/processed_ee_xyz.zarr \
         --state-keys state_ee_xyz state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
         --action-keys action_ee_xyz action_gripper \
-        --policy multitask --chunk-size 16 --d-model 384 --depth 4 --epochs 100 \
+        --policy multitask --chunk-size 16 --d-model 512 --depth 4 --epochs 200 \
         --rel-coords \
         --layer-norm --residual
 
@@ -35,6 +35,7 @@ from hw3.dataset import (
     Normalizer,
     SO100ChunkDataset,
     episode_train_val_split,
+    filter_episodes_by_goal,
     load_and_merge_zarrs,
     load_zarr,
     rel_coords_transform,
@@ -191,6 +192,13 @@ def main() -> None:
         help="Number of training epochs (default: 400).",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument(
+        "--filter-goal",
+        type=str,
+        default=None,
+        choices=["red", "green", "blue"],
+        help="Keep only episodes whose goal matches this colour (multicube per-color training).",
+    )
     args = parser.parse_args()
     EPOCHS = args.epochs
 
@@ -215,6 +223,10 @@ def main() -> None:
             zarr_paths,
             state_keys=args.state_keys,
             action_keys=args.action_keys,
+        )
+    if args.filter_goal:
+        states, actions, ep_ends = filter_episodes_by_goal(
+            states, actions, ep_ends, args.state_keys, args.filter_goal
         )
     if args.rel_coords:
         states = rel_coords_transform(states, args.state_keys)
@@ -267,11 +279,6 @@ def main() -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
-    # ── training loop ─────────────────────────────────────────────────
-    best_val = float("inf")
-    train_losses: list[float] = []
-    val_losses: list[float] = []
-
     # Derive action space tag from action keys (e.g. "ee_xyz", "joints")
     action_space = "unknown"
     if args.action_keys:
@@ -281,7 +288,24 @@ def main() -> None:
                 action_space = base.removeprefix("action_")
                 break
 
-    save_name = f"best_model_{action_space}_{args.policy}.pt"
+    # ── training loop ─────────────────────────────────────────────────
+    best_val = float("inf")
+    train_losses: list[float] = []
+    val_losses: list[float] = []
+
+    plt.ion()
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Loss")
+    ax.set_title(f"Training curves — {action_space} / {args.policy}")
+    ax.grid(True, alpha=0.3)
+    (train_line,) = ax.plot([], [], label="train")
+    (val_line,) = ax.plot([], [], label="val")
+    ax.legend()
+    plt.show(block=False)
+
+    color_tag = f"_{args.filter_goal}" if args.filter_goal else ""
+    save_name = f"best_model_{action_space}_{args.policy}{color_tag}.pt"
 
     n_dagger_eps = 0
     for zp in zarr_paths:
@@ -304,6 +328,19 @@ def main() -> None:
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
+
+        if epoch % 10 == 0:
+            print(
+                f"Epoch {epoch:3d}/{EPOCHS} | "
+                f"train {train_loss:.6f} | val {val_loss:.6f}"
+            )
+            xs = range(1, len(train_losses) + 1)
+            train_line.set_data(xs, train_losses)
+            val_line.set_data(xs, val_losses)
+            ax.relim()
+            ax.autoscale_view()
+            fig.canvas.draw()
+            fig.canvas.flush_events()
 
         tag = ""
         if val_loss < best_val:
@@ -341,10 +378,11 @@ def main() -> None:
             )
             tag = " ✓ saved"
 
-        print(
-            f"Epoch {epoch:3d}/{EPOCHS} | "
-            f"train {train_loss:.6f} | val {val_loss:.6f}{tag}"
-        )
+        if tag and epoch % 10 != 0:
+            print(
+                f"Epoch {epoch:3d}/{EPOCHS} | "
+                f"train {train_loss:.6f} | val {val_loss:.6f}{tag}"
+            )
 
     print(f"\nBest val loss: {best_val:.6f}")
     print(f"Checkpoint: {save_path}")
@@ -358,15 +396,14 @@ def main() -> None:
     print(f"Loss CSV:  {csv_path}")
 
     # ── plot loss curves ───────────────────────────────────────────────
-    epochs_range = range(1, EPOCHS + 1)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(epochs_range, train_losses, label="train")
-    ax.plot(epochs_range, val_losses, label="val")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
-    ax.set_title(f"Training curves — {action_space} / {args.policy}")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    xs = range(1, EPOCHS + 1)
+    train_line.set_data(xs, train_losses)
+    val_line.set_data(xs, val_losses)
+    ax.relim()
+    ax.autoscale_view()
+    fig.canvas.draw()
+    fig.canvas.flush_events()
+    plt.ioff()
     plot_path = save_path.with_suffix(".png")
     fig.savefig(plot_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

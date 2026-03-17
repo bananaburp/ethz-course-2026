@@ -1,5 +1,5 @@
 '''
-python scripts/record_teleop_demos.py
+python scripts/record_teleop_demos.py --multicube
 '''
 
 
