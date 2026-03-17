@@ -192,9 +192,13 @@ class ObstaclePolicy(BasePolicy):
         return self.forward(state)
 
 
-# TODO: Students implement MultiTaskPolicy here.
 class MultiTaskPolicy(BasePolicy):
-    """Goal-conditioned policy for the multicube scene."""
+    """Goal-conditioned policy for the multicube scene.
+
+    The goal conditioning (state_goal one-hot, goal_pos, per-cube positions)
+    is concatenated into the state vector at data-loading time, so this MLP
+    operates on the full goal-conditioned state directly.
+    """
 
     def __init__(
         self,
@@ -203,24 +207,64 @@ class MultiTaskPolicy(BasePolicy):
         chunk_size: int,
         d_model: int = 128,
         depth: int = 2,
+        dropout: float = 0.0,
+        layer_norm: bool = False,
+        residual: bool = False,
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
+        self.d_model = d_model
+        self.depth = depth
+        self.dropout_p = dropout
+        self.register_buffer("_layer_norm", torch.tensor(layer_norm))
+        self.register_buffer("_residual", torch.tensor(residual))
+        self._build(layer_norm, residual)
 
-    def compute_loss(
-        self,
-    ) -> torch.Tensor:
-        raise NotImplementedError
+    def _build(self, layer_norm: bool, residual: bool) -> None:
+        output_dim = self.chunk_size * self.action_dim
+        input_layers: list[nn.Module] = [nn.Linear(self.state_dim, self.d_model)]
+        if layer_norm:
+            input_layers.append(nn.LayerNorm(self.d_model))
+        input_layers.append(nn.ReLU())
+        self.input_proj = nn.Sequential(*input_layers)
+        self.hidden_blocks = nn.ModuleList([
+            _MLPBlock(self.d_model, layer_norm=layer_norm, residual=residual)
+            for _ in range(self.depth - 1)
+        ])
+        self.output_proj = nn.Linear(self.d_model, output_dim)
 
-    def sample_actions(
-        self,
-    ) -> torch.Tensor:
-        raise NotImplementedError
+    def load_state_dict(self, state_dict: dict, strict: bool = True, **kwargs):
+        needs_ln = any(
+            k.startswith("hidden_blocks.") and k.endswith(".norm.weight")
+            for k in state_dict
+        )
+        needs_res = bool(state_dict.get("_residual", torch.tensor(False)).item())
+        cur_ln = bool(self._layer_norm.item())
+        cur_res = bool(self._residual.item())
+        if needs_ln != cur_ln or needs_res != cur_res:
+            self._layer_norm.fill_(needs_ln)
+            self._residual.fill_(needs_res)
+            self._build(needs_ln, needs_res)
+        state_dict.setdefault("_layer_norm", torch.tensor(bool(needs_ln)))
+        state_dict.setdefault("_residual", torch.tensor(bool(needs_res)))
+        return super().load_state_dict(state_dict, strict=strict, **kwargs)
 
-    def forward(
-        self,
-    ) -> torch.Tensor:
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
-        raise NotImplementedError
+        x = self.input_proj(state)
+        if self.training and self.dropout_p > 0.0:
+            x = F.dropout(x, p=self.dropout_p, training=True)
+        for block in self.hidden_blocks:
+            x = block(x)
+            if self.training and self.dropout_p > 0.0:
+                x = F.dropout(x, p=self.dropout_p, training=True)
+        x = self.output_proj(x)
+        return x.view(x.size(0), self.chunk_size, self.action_dim)
+
+    def compute_loss(self, state: torch.Tensor, action_chunk: torch.Tensor) -> torch.Tensor:
+        return F.mse_loss(self.forward(state), action_chunk)
+
+    def sample_actions(self, state: torch.Tensor) -> torch.Tensor:
+        return self.forward(state)
 
 
 PolicyType: TypeAlias = Literal["obstacle", "multitask"]
@@ -256,5 +300,8 @@ def build_policy(
             chunk_size=chunk_size,
             d_model=d_model,
             depth=depth,
+            dropout=dropout,
+            layer_norm=layer_norm,
+            residual=residual,
         )
     raise ValueError(f"Unknown policy type: {policy_type}")
