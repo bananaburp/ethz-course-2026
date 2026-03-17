@@ -17,6 +17,7 @@ Usage:
         --state-keys state_ee_xyz state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
         --action-keys action_ee_xyz action_gripper \
         --policy multitask --chunk-size 16 --d-model 384 --depth 4 --epochs 100 \
+        --rel-coords \
         --layer-norm --residual
 
 
@@ -36,6 +37,7 @@ from hw3.dataset import (
     episode_train_val_split,
     load_and_merge_zarrs,
     load_zarr,
+    rel_coords_transform,
 )
 from hw3.model import BasePolicy, build_policy
 
@@ -171,6 +173,12 @@ def main() -> None:
         help="Add residual skip connections in hidden blocks (default: off).",
     )
     parser.add_argument(
+        "--rel-coords",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Express all XYZ positions relative to the target cube (multicube only).",
+    )
+    parser.add_argument(
         "--episode-split",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -208,6 +216,10 @@ def main() -> None:
             state_keys=args.state_keys,
             action_keys=args.action_keys,
         )
+    if args.rel_coords:
+        states = rel_coords_transform(states, args.state_keys)
+        print("  Relative-coordinate transform applied.")
+
     normalizer = Normalizer.from_data(states, actions)
 
     print(f"  state_dim={states.shape[1]}, action_dim={actions.shape[1]}")
@@ -323,6 +335,7 @@ def main() -> None:
                     "batch_size": BATCH_SIZE,
                     "lr": LR,
                     "val_split": VAL_SPLIT,
+                    "rel_coords": args.rel_coords,
                 },
                 save_path,
             )

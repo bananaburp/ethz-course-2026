@@ -11,6 +11,94 @@ import zarr
 from torch.utils.data import Dataset
 
 
+_KEY_FULL_DIMS: dict[str, int] = {
+    "state_ee_xyz": 3,
+    "state_ee_full": 7,
+    "state_joints": 6,
+    "state_gripper": 1,
+    "state_cube": 7,
+    "state_obstacle": 3,
+    "goal_pos": 3,
+    "original_pos_cube_red": 7,
+    "original_pos_cube_green": 7,
+    "original_pos_cube_blue": 7,
+    "state_goal": 3,
+}
+
+
+def rel_coords_transform(states: np.ndarray, state_keys: list[str]) -> np.ndarray:
+    """Express all XYZ positions relative to the target cube centre.
+
+    Parses *state_keys* to locate the dims for EE xyz, per-cube xyz,
+    goal one-hot (state_goal), and goal_pos.  Computes the target cube
+    centre as the weighted sum of the three cube xyz columns (weighted by
+    the goal one-hot), then subtracts it from every position column.
+
+    No-op when *state_keys* does not include all three cube-position keys
+    and *state_goal* (i.e. not a multicube task).
+
+    Works on both a single row (1-D, shape ``(state_dim,)``) and a batch
+    (2-D, shape ``(N, state_dim)``).
+    """
+    squeeze = states.ndim == 1
+    if squeeze:
+        states = states[None]
+
+    ee_xyz_start: int | None = None
+    red_start: int | None = None
+    green_start: int | None = None
+    blue_start: int | None = None
+    goal_one_hot_start: int | None = None
+    goal_pos_start: int | None = None
+
+    pos = 0
+    for spec in state_keys:
+        name, sl = _parse_key_spec(spec)
+        full_dim = _KEY_FULL_DIMS.get(name, 0)
+        seg_dim = len(np.arange(full_dim)[sl]) if full_dim > 0 else 0
+
+        if name == "state_ee_xyz":
+            ee_xyz_start = pos
+        elif name == "state_ee_full":
+            ee_xyz_start = pos
+        elif name == "original_pos_cube_red":
+            red_start = pos
+        elif name == "original_pos_cube_green":
+            green_start = pos
+        elif name == "original_pos_cube_blue":
+            blue_start = pos
+        elif name == "state_goal":
+            goal_one_hot_start = pos
+        elif name == "goal_pos":
+            goal_pos_start = pos
+
+        pos += seg_dim
+
+    if None in (red_start, green_start, blue_start, goal_one_hot_start):
+        return states[0] if squeeze else states
+
+    goal = states[:, goal_one_hot_start : goal_one_hot_start + 3]
+    red_xyz = states[:, red_start : red_start + 3]
+    green_xyz = states[:, green_start : green_start + 3]
+    blue_xyz = states[:, blue_start : blue_start + 3]
+    target_xyz = (
+        goal[:, 0:1] * red_xyz
+        + goal[:, 1:2] * green_xyz
+        + goal[:, 2:3] * blue_xyz
+    )
+
+    result = states.copy()
+    if ee_xyz_start is not None:
+        result[:, ee_xyz_start : ee_xyz_start + 3] -= target_xyz
+    result[:, red_start : red_start + 3] -= target_xyz
+    result[:, green_start : green_start + 3] -= target_xyz
+    result[:, blue_start : blue_start + 3] -= target_xyz
+    if goal_pos_start is not None:
+        result[:, goal_pos_start : goal_pos_start + 3] -= target_xyz
+
+    return result[0] if squeeze else result
+
+
 @dataclass(frozen=True)
 class Normalizer:
     """Feature-wise normalizer for states and actions."""

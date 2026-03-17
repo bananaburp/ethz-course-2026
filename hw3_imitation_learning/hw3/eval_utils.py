@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from hw3.dataset import Normalizer
+from hw3.dataset import Normalizer, rel_coords_transform
 from hw3.model import build_policy
 from hw3.sim_env import CUBE_COLORS, SO100MulticubeSimEnv, SO100SimEnv
 
@@ -128,6 +128,7 @@ def load_checkpoint(
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)
     model.eval()
+    model.rel_coords = bool(ckpt.get("rel_coords", False))
 
     print(f"Loaded checkpoint from {ckpt_path}")
     print(
@@ -171,6 +172,8 @@ def infer_action_chunk(
 ) -> np.ndarray:
     """Run one policy forward pass and return a denormalized action chunk."""
     state = obs_to_state(obs, state_keys)
+    if getattr(model, "rel_coords", False):
+        state = rel_coords_transform(state, state_keys)
     state_norm = normalizer.normalize_state(state)
     state_t = torch.from_numpy(state_norm).float().unsqueeze(0).to(device)
 
