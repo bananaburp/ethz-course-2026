@@ -13,12 +13,20 @@ Usage:
         --layer-norm --residual
 
     python scripts/train.py \
-        --zarr datasets/processed/multi_cube/processed_ee_xyz.zarr \
+        --zarr /Volumes/T9/DevSpace/Github/robot-learning/hw3_imitation_learning/datasets/processed/multi_cube/processed_ee_xyz.zarr \
         --state-keys state_ee_xyz state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
         --action-keys action_ee_xyz action_gripper \
-        --policy multitask --chunk-size 16 --d-model 512 --depth 4 --epochs 200 \
+        --policy multitask --chunk-size 16 --d-model 512 --depth 4 --epochs 100 \
         --rel-coords \
         --layer-norm --residual
+
+    python scripts/train.py \
+    --zarr /Volumes/T9/DevSpace/Github/robot-learning/hw3_imitation_learning/datasets/processed/multi_cube/processed_ee_xyz.zarr \
+    --state-keys state_ee_xyz state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
+    --action-keys action_ee_xyz action_gripper \
+    --policy act --chunk-size 16 --d-model 192 --depth 2 --epochs 100 \
+    --latent-dim 32 --kl-weight 1.0
+
 
 
 """
@@ -129,9 +137,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--policy",
-        choices=["obstacle", "multitask"],
+        choices=["obstacle", "multitask", "act"],
         default="obstacle",
-        help="Policy type: 'obstacle' for single-cube obstacle scene, 'multitask' for multicube (default: obstacle).",
+        help="Policy type: 'obstacle' for single-cube obstacle scene, 'multitask' for multicube, 'act' for CVAE+Transformer (default: obstacle).",
     )
     parser.add_argument(
         "--chunk-size",
@@ -192,6 +200,18 @@ def main() -> None:
         help="Number of training epochs (default: 400).",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument(
+        "--latent-dim",
+        type=int,
+        default=32,
+        help="CVAE latent dimension for ACTPolicy (default: 32).",
+    )
+    parser.add_argument(
+        "--kl-weight",
+        type=float,
+        default=1.0,
+        help="Beta weight on KL term for ACTPolicy (default: 1.0).",
+    )
     parser.add_argument(
         "--filter-goal",
         type=str,
@@ -263,13 +283,14 @@ def main() -> None:
         args.policy,
         state_dim=states.shape[1],
         action_dim=actions.shape[1],
-        # TODO: build with your desired specifications
         chunk_size=args.chunk_size,
         d_model=args.d_model,
         depth=args.depth,
         dropout=args.dropout,
         layer_norm=args.layer_norm,
         residual=args.residual,
+        latent_dim=args.latent_dim,
+        kl_weight=args.kl_weight,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -373,6 +394,8 @@ def main() -> None:
                     "lr": LR,
                     "val_split": VAL_SPLIT,
                     "rel_coords": args.rel_coords,
+                    "latent_dim": args.latent_dim,
+                    "kl_weight": args.kl_weight,
                 },
                 save_path,
             )

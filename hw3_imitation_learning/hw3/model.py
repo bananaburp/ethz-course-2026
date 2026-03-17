@@ -267,7 +267,96 @@ class MultiTaskPolicy(BasePolicy):
         return self.forward(state)
 
 
-PolicyType: TypeAlias = Literal["obstacle", "multitask"]
+class ACTPolicy(BasePolicy):
+    """Action Chunking with Transformers (CVAE + Transformer decoder).
+
+    Encoder (training): q(z | state, actions) — learns a latent style variable.
+    Decoder (train + inference): p(actions | state, z) — DETR-style parallel prediction.
+    Inference: z = 0 (prior mean) for deterministic, mode-seeking behavior.
+    """
+
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        chunk_size: int,
+        d_model: int = 256,
+        depth: int = 4,
+        latent_dim: int = 32,
+        kl_weight: float = 1.0,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__(state_dim, action_dim, chunk_size)
+        self.d_model = d_model
+        self.depth = depth
+        self.latent_dim = latent_dim
+        self.kl_weight = kl_weight
+        num_heads = min(8, d_model // 16)
+
+        # ── CVAE Encoder ──────────────────────────────────────────────
+        self.enc_state_proj = nn.Linear(state_dim, d_model)
+        self.action_proj = nn.Linear(action_dim, d_model)
+        self.action_pos_emb = nn.Parameter(torch.zeros(1, chunk_size, d_model))
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=num_heads,
+            dim_feedforward=4 * d_model, dropout=dropout, batch_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=depth)
+        self.enc_mean = nn.Linear(d_model, latent_dim)
+        self.enc_logvar = nn.Linear(d_model, latent_dim)
+
+        # ── Policy Decoder ────────────────────────────────────────────
+        self.dec_state_proj = nn.Linear(state_dim, d_model)
+        self.latent_proj = nn.Linear(latent_dim, d_model)
+        self.query_embed = nn.Parameter(torch.zeros(1, chunk_size, d_model))
+        dec_layer = nn.TransformerDecoderLayer(
+            d_model=d_model, nhead=num_heads,
+            dim_feedforward=4 * d_model, dropout=dropout, batch_first=True,
+        )
+        self.decoder = nn.TransformerDecoder(dec_layer, num_layers=depth)
+        self.action_head = nn.Linear(d_model, action_dim)
+
+        nn.init.normal_(self.action_pos_emb, std=0.02)
+        nn.init.normal_(self.cls_token, std=0.02)
+        nn.init.normal_(self.query_embed, std=0.02)
+
+    def _encode(
+        self, state: torch.Tensor, action_chunk: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        B = state.size(0)
+        cls_emb = self.cls_token.expand(B, 1, self.d_model) + self.enc_state_proj(state).unsqueeze(1)
+        act_emb = self.action_proj(action_chunk) + self.action_pos_emb
+        seq = torch.cat([cls_emb, act_emb], dim=1)
+        enc_out = self.encoder(seq)[:, 0, :]
+        return self.enc_mean(enc_out), self.enc_logvar(enc_out)
+
+    def _decode(self, state: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        B = state.size(0)
+        mem = torch.cat([
+            self.dec_state_proj(state).unsqueeze(1),
+            self.latent_proj(z).unsqueeze(1),
+        ], dim=1)
+        queries = self.query_embed.expand(B, self.chunk_size, self.d_model)
+        dec_out = self.decoder(tgt=queries, memory=mem)
+        return self.action_head(dec_out)
+
+    def compute_loss(
+        self, state: torch.Tensor, action_chunk: torch.Tensor
+    ) -> torch.Tensor:
+        z_mean, z_logvar = self._encode(state, action_chunk)
+        z = z_mean + torch.randn_like(z_mean) * (0.5 * z_logvar).exp()
+        pred = self._decode(state, z)
+        recon = F.mse_loss(pred, action_chunk)
+        kl = -0.5 * (1 + z_logvar - z_mean.pow(2) - z_logvar.exp()).sum(-1).mean()
+        return recon + self.kl_weight * kl
+
+    def sample_actions(self, state: torch.Tensor) -> torch.Tensor:
+        z = torch.zeros(state.size(0), self.latent_dim, device=state.device)
+        return self._decode(state, z)
+
+
+PolicyType: TypeAlias = Literal["obstacle", "multitask", "act"]
 
 
 def build_policy(
@@ -281,6 +370,8 @@ def build_policy(
     dropout: float = 0.0,
     layer_norm: bool = False,
     residual: bool = False,
+    latent_dim: int = 32,
+    kl_weight: float = 1.0,
 ) -> BasePolicy:
     if policy_type == "obstacle":
         return ObstaclePolicy(
@@ -303,5 +394,16 @@ def build_policy(
             dropout=dropout,
             layer_norm=layer_norm,
             residual=residual,
+        )
+    if policy_type == "act":
+        return ACTPolicy(
+            state_dim=state_dim,
+            action_dim=action_dim,
+            chunk_size=chunk_size,
+            d_model=d_model,
+            depth=depth,
+            latent_dim=latent_dim,
+            kl_weight=kl_weight,
+            dropout=dropout,
         )
     raise ValueError(f"Unknown policy type: {policy_type}")

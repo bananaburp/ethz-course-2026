@@ -145,6 +145,72 @@ def handle_teleop_key(
         data.ctrl[:] = np.clip(data.ctrl, lo, hi)
 
 
+# ── joint-space teleop key dispatch ─────────────────────────────────
+
+JOINT_TELEOP_STEP: float = 0.05  # radians per keypress
+
+
+def handle_teleop_key_joints(
+    action_name: str,
+    data: mujoco.MjData,
+    model: mujoco.MjModel,
+    act_ids: np.ndarray,
+    jaw_idx: int,
+) -> None:
+    """Apply a single teleop key action in joint space.
+
+    Reuses the same action names as :func:`handle_teleop_key` but maps them to
+    per-joint increments on ``data.ctrl`` instead of mocap EE targets.
+
+    Key → joint mapping
+    -------------------
+    move_up / move_down         → Joint 0  Rotation     +/-
+    move_left / move_right      → Joint 1  Pitch        +/-
+    move_forward / move_backward→ Joint 2  Elbow        +/-
+    rot_x_pos / rot_x_neg       → Joint 3  Wrist_Pitch  +/-
+    rot_y_pos / rot_y_neg       → Joint 4  Wrist_Roll   +/-
+    gripper_open / gripper_close→ Joint 5  Jaw          +/-
+
+    Parameters
+    ----------
+    action_name : str
+        Action identifier from the keymap.
+    data : mujoco.MjData
+        Active simulation data (modified in-place).
+    model : mujoco.MjModel
+        MuJoCo model (used for ctrl range clamping).
+    act_ids : np.ndarray
+        Actuator indices for all joints (length 6, includes jaw at ``jaw_idx``).
+    jaw_idx : int
+        Index of the jaw joint within ``act_ids``.
+    """
+    lo = model.actuator_ctrlrange[:, 0]
+    hi = model.actuator_ctrlrange[:, 1]
+    step = JOINT_TELEOP_STEP
+
+    _JOINT_ACTION_MAP: dict[str, tuple[int, float]] = {
+        "move_up":        (0,  step),
+        "move_down":      (0, -step),
+        "move_left":      (1, -step),
+        "move_right":     (1,  step),
+        "move_forward":   (2,  step),
+        "move_backward":  (2, -step),
+        "rot_x_pos":      (3,  step),
+        "rot_x_neg":      (3, -step),
+        "rot_y_pos":      (4,  step),
+        "rot_y_neg":      (4, -step),
+        "gripper_open":   (jaw_idx,  0.10),
+        "gripper_close":  (jaw_idx, -0.10),
+    }
+
+    if action_name not in _JOINT_ACTION_MAP:
+        return
+
+    joint_idx, delta = _JOINT_ACTION_MAP[action_name]
+    data.ctrl[act_ids[joint_idx]] += delta
+    data.ctrl[:] = np.clip(data.ctrl, lo, hi)
+
+
 # ── scaled teleop action (analog gamepad) ────────────────────────────
 
 GAMEPAD_POS_STEP: float = 0.01   # metres per frame at full stick deflection

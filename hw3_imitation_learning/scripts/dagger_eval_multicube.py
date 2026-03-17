@@ -48,6 +48,7 @@ from hw3.teleop_utils import (
     JOINT_NAMES,
     compose_camera_views,
     handle_teleop_key,
+    handle_teleop_key_joints,
     load_keymap,
 )
 from so101_gym.constants import ASSETS_DIR
@@ -72,6 +73,7 @@ def run_dagger_episode(
     writer: MulticubeZarrWriter,
     key_to_action: dict[int, str],
     *,
+    use_mocap: bool = True,
     max_steps: int = 800,
     successes: int = 0,
     total: int = 0,
@@ -130,13 +132,22 @@ def run_dagger_episode(
                 return False, 0, False, False
 
             if human_control and action_name is not None:
-                handle_teleop_key(
-                    action_name,
-                    env.data,
-                    env.model,
-                    env.mocap_id,
-                    env.act_ids[env._jaw_idx],
-                )
+                if use_mocap:
+                    handle_teleop_key(
+                        action_name,
+                        env.data,
+                        env.model,
+                        env.mocap_id,
+                        env.act_ids[env._jaw_idx],
+                    )
+                else:
+                    handle_teleop_key_joints(
+                        action_name,
+                        env.data,
+                        env.model,
+                        env.act_ids,
+                        env._jaw_idx,
+                    )
 
         # ── record state BEFORE step (human control) ──────────────────
         if human_control:
@@ -353,6 +364,7 @@ def main() -> None:
                 device,
                 writer,
                 key_to_action,
+                use_mocap=use_mocap,
                 max_steps=args.max_steps,
                 successes=successes,
                 total=ep - 1,
