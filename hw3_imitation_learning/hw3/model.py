@@ -94,24 +94,40 @@ class MultiTaskPolicy(BasePolicy):
         chunk_size: int,
         d_model: int = 128,
         depth: int = 2,
+        dropout: float = 0.0,
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
+        self.dropout_p = dropout
+        output_dim = chunk_size * action_dim
+        layers: list[nn.Module] = [nn.Linear(state_dim, d_model), nn.ReLU()]
+        for _ in range(depth - 1):
+            layers += [nn.Linear(d_model, d_model), nn.ReLU()]
+        layers.append(nn.Linear(d_model, output_dim))
+        self.net = nn.Sequential(*layers)
 
     def compute_loss(
-        self,
+        self, state: torch.Tensor, action_chunk: torch.Tensor
     ) -> torch.Tensor:
-        raise NotImplementedError
+        pred = self.forward(state)
+        return F.mse_loss(pred, action_chunk)
 
     def sample_actions(
         self,
+        state: torch.Tensor,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        return self.forward(state)
 
     def forward(
         self,
+        state: torch.Tensor,
     ) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
-        raise NotImplementedError
+        x = state
+        for layer in self.net:
+            x = layer(x)
+            if self.training and self.dropout_p > 0.0 and isinstance(layer, nn.ReLU):
+                x = F.dropout(x, p=self.dropout_p, training=True)
+        return x.view(x.size(0), self.chunk_size, self.action_dim)
 
 
 PolicyType: TypeAlias = Literal["obstacle", "multitask"]
