@@ -159,5 +159,6 @@ def build_policy(
             chunk_size=chunk_size,
             d_model=d_model,
             depth=depth,
+            dropout=dropout,
         )
     raise ValueError(f"Unknown policy type: {policy_type}")

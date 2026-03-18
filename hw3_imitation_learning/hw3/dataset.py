@@ -62,10 +62,29 @@ def _parse_key_spec(spec: str) -> tuple[str, slice]:
     )
 
 
+def get_state_key_layout(
+    zarr_path: Path, key_specs: list[str]
+) -> list[tuple[str, int, int]]:
+    """Return [(spec, col_start, col_end), ...] for each key spec against a zarr."""
+    root = zarr.open_group(str(zarr_path), mode="r")
+    data = root["data"]
+    layout: list[tuple[str, int, int]] = []
+    offset = 0
+    for spec in key_specs:
+        name, col_slice = _parse_key_spec(spec)
+        arr = np.asarray(data[name][:1], dtype=np.float32)
+        sliced = arr[:, col_slice] if col_slice != slice(None) else arr
+        width = sliced.shape[1]
+        layout.append((spec, offset, offset + width))
+        offset += width
+    return layout
+
+
 def load_zarr(
     zarr_path: Path,
     state_keys: list[str] | None = None,
     action_keys: list[str] | None = None,
+    debug: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load states, actions, and episode_ends from a processed .zarr.
 
@@ -117,6 +136,24 @@ def load_zarr(
 
     episode_ends = np.asarray(root["meta"]["episode_ends"][:], dtype=np.int64)
 
+    if debug:
+        print(f"\n[load_zarr] {zarr_path.name}")
+        print("  State key layout:")
+        offset = 0
+        for spec, part in zip(state_keys, state_parts):
+            w = part.shape[1]
+            print(f"    col {offset:3d}-{offset+w-1:3d} | {spec}")
+            offset += w
+        print(f"    => total state_dim: {states.shape[1]}")
+        print("  Action key layout:")
+        offset = 0
+        for spec, part in zip(action_keys, action_parts):
+            w = part.shape[1]
+            print(f"    col {offset:3d}-{offset+w-1:3d} | {spec}")
+            offset += w
+        print(f"    => total action_dim: {actions.shape[1]}")
+        print(f"  Timesteps: {states.shape[0]}, Episodes: {len(episode_ends)}")
+
     return states, actions, episode_ends
 
 
@@ -124,6 +161,7 @@ def load_and_merge_zarrs(
     zarr_paths: list[Path],
     state_keys: list[str] | None = None,
     action_keys: list[str] | None = None,
+    debug: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load and concatenate data from multiple processed .zarr stores.
 
@@ -139,9 +177,9 @@ def load_and_merge_zarrs(
     all_ep_ends: list[np.ndarray] = []
     offset = 0
 
-    for zp in zarr_paths:
+    for i, zp in enumerate(zarr_paths):
         states, actions, ep_ends = load_zarr(
-            zp, state_keys=state_keys, action_keys=action_keys,
+            zp, state_keys=state_keys, action_keys=action_keys, debug=(debug and i == 0),
         )
         all_states.append(states)
         all_actions.append(actions)
@@ -266,24 +304,54 @@ class SO100ChunkDataset(Dataset):
         episode_ends: np.ndarray,
         chunk_size: int,
         normalizer: Normalizer | None = None,
+        goal_permutation: bool = False,
+        cube_col_start: int | None = None,
+        goal_col_start: int | None = None,
     ) -> None:
         self.states = states
         self.actions = actions
         self.chunk_size = chunk_size
         self.normalizer = normalizer
         self.indices = build_valid_indices(episode_ends, chunk_size)
+        self.goal_permutation = goal_permutation
+        self.goal_col_start = goal_col_start if goal_col_start is not None else states.shape[1] - 3
+        self.cube_col_start = cube_col_start if cube_col_start is not None else states.shape[1] - 12
+
+        print(f"\n[SO100ChunkDataset] state_dim={states.shape[1]}, action_dim={actions.shape[1]}, "
+              f"chunk_size={chunk_size}, n_valid={len(self.indices)}")
+        print(f"  cube_col_start={self.cube_col_start}  (cols {self.cube_col_start}-{self.cube_col_start+8}: 3 cube xyz blocks)")
+        print(f"  goal_col_start={self.goal_col_start}  (cols {self.goal_col_start}-{self.goal_col_start+2}: goal one-hot)")
+        if self.goal_permutation and len(self.indices) > 0:
+            t0 = int(self.indices[0])
+            s0 = states[t0]
+            c, g = self.cube_col_start, self.goal_col_start
+            print(f"  [perm debug] sample t={t0} raw (before norm):")
+            print(f"    cube_red  cols {c  }-{c+2 }: {s0[c  :c+3 ]}")
+            print(f"    cube_grn  cols {c+3}-{c+5 }: {s0[c+3:c+6 ]}")
+            print(f"    cube_blu  cols {c+6}-{c+8 }: {s0[c+6:c+9 ]}")
+            print(f"    goal      cols {g  }-{g+2 }: {s0[g  :g+3 ]}")
 
     def __len__(self) -> int:
         return len(self.indices)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         t = int(self.indices[idx])
-        state = self.states[t]
+        state = self.states[t].copy()
         action_chunk = self.actions[t : t + self.chunk_size]
 
         if self.normalizer is not None:
             state = self.normalizer.normalize_state(state)
             action_chunk = self.normalizer.normalize_action(action_chunk)
+
+        if self.goal_permutation:
+            perm = np.random.permutation(3)
+            # permute the three cube position blocks (each 3 dims)
+            c = self.cube_col_start
+            cube_blocks = state[c : c + 9].reshape(3, 3)
+            state[c : c + 9] = cube_blocks[perm].reshape(9)
+            # permute the goal one-hot to match
+            g = self.goal_col_start
+            state[g : g + 3] = state[g : g + 3][perm]
 
         state_t = torch.from_numpy(state).float()
         action_t = torch.from_numpy(action_chunk).float()

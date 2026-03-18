@@ -5,7 +5,8 @@ multicube goal-conditioned setup.
 
 Usage:
     python scripts/eval.py \
-        --checkpoint checkpoints/single_cube/best_model_ee_xyz_obstacle.pt \
+        --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_multitask.pt \
+        --multicube \
         --num-episodes 20 \
         --headless \
 """
