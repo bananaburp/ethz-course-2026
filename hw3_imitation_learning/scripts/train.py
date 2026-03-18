@@ -20,6 +20,26 @@ Usage:
         --rel-coords \
         --layer-norm --residual
 
+    # BESO score-based diffusion policy (single cube)
+    python scripts/train.py \
+        --zarr datasets/processed/single_cube/processed_ee_xyz.zarr \
+        --state-keys state_ee_xyz state_gripper "state_cube[:5]" state_obstacle \
+        --action-keys action_ee_xyz action_gripper \
+        --policy beso --chunk-size 16 --d-model 256 --depth 4 --epochs 200 \
+        --sigma-data 0.5 --sigma-min 0.002 --sigma-max 80.0 \
+        --n-timesteps 10 --cond-mask-prob 0.1 \
+        --layer-norm
+
+    # BESO score-based diffusion policy (multi cube, goal-conditioned)
+    python scripts/train.py \
+        --zarr datasets/processed/multi_cube/processed_ee_xyz.zarr \
+        --state-keys state_ee_xyz state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
+        --action-keys action_ee_xyz action_gripper \
+        --policy beso --chunk-size 16 --d-model 384 --depth 4 --epochs 300 \
+        --sigma-data 0.5 --sigma-min 0.002 --sigma-max 80.0 \
+        --n-timesteps 20 --cond-mask-prob 0.1 \
+        --rel-coords --layer-norm
+
 
 """
 
@@ -129,9 +149,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--policy",
-        choices=["obstacle", "multitask"],
+        choices=["obstacle", "multitask", "beso"],
         default="obstacle",
-        help="Policy type: 'obstacle' for single-cube obstacle scene, 'multitask' for multicube (default: obstacle).",
+        help="Policy type: 'obstacle', 'multitask', or 'beso' (score-based diffusion) (default: obstacle).",
     )
     parser.add_argument(
         "--chunk-size",
@@ -172,6 +192,37 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Add residual skip connections in hidden blocks (default: off).",
+    )
+    # ── BESO diffusion hyperparameters ────────────────────────────────
+    parser.add_argument(
+        "--sigma-data",
+        type=float,
+        default=0.5,
+        help="EDM sigma_data: expected std of clean (normalised) actions (default: 0.5).",
+    )
+    parser.add_argument(
+        "--sigma-min",
+        type=float,
+        default=0.002,
+        help="BESO minimum noise level (default: 0.002).",
+    )
+    parser.add_argument(
+        "--sigma-max",
+        type=float,
+        default=80.0,
+        help="BESO maximum noise level (default: 80.0).",
+    )
+    parser.add_argument(
+        "--n-timesteps",
+        type=int,
+        default=10,
+        help="BESO denoising steps at inference (default: 10).",
+    )
+    parser.add_argument(
+        "--cond-mask-prob",
+        type=float,
+        default=0.1,
+        help="Classifier-free guidance dropout probability (default: 0.1).",
     )
     parser.add_argument(
         "--rel-coords",
@@ -263,13 +314,17 @@ def main() -> None:
         args.policy,
         state_dim=states.shape[1],
         action_dim=actions.shape[1],
-        # TODO: build with your desired specifications
         chunk_size=args.chunk_size,
         d_model=args.d_model,
         depth=args.depth,
         dropout=args.dropout,
         layer_norm=args.layer_norm,
         residual=args.residual,
+        sigma_data=args.sigma_data,
+        sigma_min=args.sigma_min,
+        sigma_max=args.sigma_max,
+        n_timesteps=args.n_timesteps,
+        cond_mask_prob=args.cond_mask_prob,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -367,6 +422,11 @@ def main() -> None:
                     "dropout": args.dropout,
                     "layer_norm": args.layer_norm,
                     "residual": args.residual,
+                    "sigma_data": args.sigma_data,
+                    "sigma_min": args.sigma_min,
+                    "sigma_max": args.sigma_max,
+                    "n_timesteps": args.n_timesteps,
+                    "cond_mask_prob": args.cond_mask_prob,
                     "val_loss": val_loss,
                     "epochs": EPOCHS,
                     "batch_size": BATCH_SIZE,
