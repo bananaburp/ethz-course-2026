@@ -3,8 +3,8 @@
 
 Usage
 -----
-    python student_eval/run_eval.py --exercise 1 --checkpoint ./checkpoints/single_cube/best_model_ee_full_obstacle.pt
-    python student_eval/run_eval.py --exercise 2 --checkpoint ./checkpoints/single_cube/best_model_ee_full_obstacle.pt
+    python student_eval/run_eval.py --exercise 1 --checkpoint ./checkpoints/single_cube/best_model_ee_xyz_obstacle.pt
+    python student_eval/run_eval.py --exercise 2 --checkpoint ./checkpoints/single_cube/best_model_ee_xyz_obstacle_dagger19ep.pt
     python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multicube/best_model_multicube.pt
 
 The script expects your ``model.py`` at ``hw3/model.py`` relative to the
@@ -14,11 +14,11 @@ This script imports the **compiled** ``eval_harness`` module (.so / .pyd)
 which lives in the same directory.  Do NOT modify or replace it.
 
 The script will:
-  1. Load your model definition from ``./model.py``
-  2. Load the trained weights from the checkpoint
-  3. Run 100 headless simulation episodes (seed=42)
-  4. Print your success rate and score
-  5. Write a signed ``ex{N}_result.hwresult`` file
+    1. Load your model definition from ``./model.py``
+    2. Load the trained weights from the checkpoint
+    3. Run 100 headless simulation episodes (seed=42)
+    4. Print your success rate and score
+    5. Write a signed ``ex{N}_result.hwresult`` file
 
 Upload the ``.hwresult`` file(s) to Gradescope.
 """

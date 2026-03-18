@@ -24,3 +24,6 @@ video_script.md
 .claude/
 
 hw3_imitation_learning/datasets
+results/
+checkpoints/
+checkpoints/single_cube/
