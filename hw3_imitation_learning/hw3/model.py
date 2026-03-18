@@ -267,7 +267,155 @@ class MultiTaskPolicy(BasePolicy):
         return self.forward(state)
 
 
-PolicyType: TypeAlias = Literal["obstacle", "multitask"]
+class CVAEPolicy(BasePolicy):
+    """CVAE policy with learned conditional prior p_θ(z|s).
+
+    Training: encoder q_φ(z|s,a) → z, KL(q_φ || p_θ(z|s)) + recon loss.
+    Inference: sample z ~ p_θ(z|s), decode (s, z) → action_chunk.
+    """
+
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        chunk_size: int,
+        d_model: int = 256,
+        depth: int = 3,
+        dropout: float = 0.0,
+        layer_norm: bool = False,
+        residual: bool = False,
+        latent_dim: int = 64,
+        beta: float = 1e-4,
+    ) -> None:
+        super().__init__(state_dim, action_dim, chunk_size)
+        self.d_model = d_model
+        self.depth = depth
+        self.dropout_p = dropout
+        self.latent_dim = latent_dim
+        self.beta = beta
+        self.register_buffer("_layer_norm", torch.tensor(layer_norm))
+        self.register_buffer("_residual", torch.tensor(residual))
+        self._build(layer_norm, residual)
+
+    def _build(self, layer_norm: bool, residual: bool) -> None:
+        flat_action_dim = self.chunk_size * self.action_dim
+
+        # Encoder: (state || action_chunk_flat) → (mu, log_var)
+        enc_layers: list[nn.Module] = [nn.Linear(self.state_dim + flat_action_dim, self.d_model)]
+        if layer_norm:
+            enc_layers.append(nn.LayerNorm(self.d_model))
+        enc_layers.append(nn.ReLU())
+        self.enc_input = nn.Sequential(*enc_layers)
+        self.enc_hidden = nn.ModuleList([
+            _MLPBlock(self.d_model, layer_norm=layer_norm, residual=residual)
+            for _ in range(self.depth - 1)
+        ])
+        self.enc_out = nn.Linear(self.d_model, 2 * self.latent_dim)  # mu + log_var
+
+        # Decoder: (state || z) → action_chunk_flat
+        dec_layers: list[nn.Module] = [nn.Linear(self.state_dim + self.latent_dim, self.d_model)]
+        if layer_norm:
+            dec_layers.append(nn.LayerNorm(self.d_model))
+        dec_layers.append(nn.ReLU())
+        self.dec_input = nn.Sequential(*dec_layers)
+        self.dec_hidden = nn.ModuleList([
+            _MLPBlock(self.d_model, layer_norm=layer_norm, residual=residual)
+            for _ in range(self.depth - 1)
+        ])
+        self.dec_out = nn.Linear(self.d_model, flat_action_dim)
+
+        # Prior network: state → (mu_prior, log_var_prior)
+        prior_layers: list[nn.Module] = [nn.Linear(self.state_dim, self.d_model)]
+        if layer_norm:
+            prior_layers.append(nn.LayerNorm(self.d_model))
+        prior_layers.append(nn.ReLU())
+        self.prior_net = nn.Sequential(*prior_layers)
+        self.prior_hidden = nn.ModuleList([
+            _MLPBlock(self.d_model, layer_norm=layer_norm, residual=residual)
+            for _ in range(max(1, self.depth - 2))
+        ])
+        self.prior_out = nn.Linear(self.d_model, 2 * self.latent_dim)
+
+    def _encode(self, state: torch.Tensor, action_chunk: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        flat = action_chunk.view(action_chunk.size(0), -1)
+        x = self.enc_input(torch.cat([state, flat], dim=-1))
+        if self.training and self.dropout_p > 0.0:
+            x = F.dropout(x, p=self.dropout_p, training=True)
+        for block in self.enc_hidden:
+            x = block(x)
+            if self.training and self.dropout_p > 0.0:
+                x = F.dropout(x, p=self.dropout_p, training=True)
+        mu, log_var = self.enc_out(x).chunk(2, dim=-1)
+        log_var = log_var.clamp(-10, 4)
+        return mu, log_var
+
+    def _prior(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        x = self.prior_net(state)
+        for block in self.prior_hidden:
+            x = block(x)
+        mu_p, log_var_p = self.prior_out(x).chunk(2, dim=-1)
+        log_var_p = log_var_p.clamp(-10, 4)
+        return mu_p, log_var_p
+
+    def _decode(self, state: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        x = self.dec_input(torch.cat([state, z], dim=-1))
+        if self.training and self.dropout_p > 0.0:
+            x = F.dropout(x, p=self.dropout_p, training=True)
+        for block in self.dec_hidden:
+            x = block(x)
+            if self.training and self.dropout_p > 0.0:
+                x = F.dropout(x, p=self.dropout_p, training=True)
+        x = self.dec_out(x)
+        return x.view(x.size(0), self.chunk_size, self.action_dim)
+
+    def compute_loss(self, state: torch.Tensor, action_chunk: torch.Tensor) -> torch.Tensor:
+        mu, log_var = self._encode(state, action_chunk)
+        # Reparameterization trick
+        std = (0.5 * log_var).exp()
+        z = mu + std * torch.randn_like(std)
+        pred = self._decode(state, z)
+        recon = F.mse_loss(pred, action_chunk)
+        mu_p, log_var_p = self._prior(state)
+        var_p = log_var_p.exp()
+        kl = 0.5 * (
+            log_var_p - log_var
+            + (log_var.exp() + (mu - mu_p).pow(2)) / var_p
+            - 1
+        ).mean(dim=-1).mean()
+        return recon + self.beta * kl
+
+    def sample_actions(self, state: torch.Tensor, deterministic: bool = True) -> torch.Tensor:
+        mu_p, log_var_p = self._prior(state)
+        if deterministic:
+            z = mu_p
+        else:
+            std_p = (0.5 * log_var_p).exp()
+            z = mu_p + std_p * torch.randn_like(std_p)
+        return self._decode(state, z)
+
+    def load_state_dict(self, state_dict: dict, strict: bool = True, **kwargs):
+        needs_ln = any(
+            k.endswith(".norm.weight")
+            for k in state_dict
+            if k.startswith("enc_hidden.") or k.startswith("dec_hidden.")
+        )
+        needs_res = bool(state_dict.get("_residual", torch.tensor(False)).item())
+        cur_ln = bool(self._layer_norm.item())
+        cur_res = bool(self._residual.item())
+        if needs_ln != cur_ln or needs_res != cur_res:
+            self._layer_norm.fill_(needs_ln)
+            self._residual.fill_(needs_res)
+            self._build(needs_ln, needs_res)
+        state_dict.setdefault("_layer_norm", torch.tensor(bool(needs_ln)))
+        state_dict.setdefault("_residual", torch.tensor(bool(needs_res)))
+        # Old checkpoints lack prior_net weights — fall back to non-strict load.
+        has_prior = any(k.startswith("prior_") for k in state_dict)
+        if not has_prior:
+            strict = False
+        return super().load_state_dict(state_dict, strict=strict, **kwargs)
+
+
+PolicyType: TypeAlias = Literal["obstacle", "multitask", "cvae"]
 
 
 def build_policy(
@@ -281,6 +429,8 @@ def build_policy(
     dropout: float = 0.0,
     layer_norm: bool = False,
     residual: bool = False,
+    latent_dim: int = 64,
+    beta: float = 1.0,
 ) -> BasePolicy:
     if policy_type == "obstacle":
         return ObstaclePolicy(
@@ -303,5 +453,18 @@ def build_policy(
             dropout=dropout,
             layer_norm=layer_norm,
             residual=residual,
+        )
+    if policy_type == "cvae":
+        return CVAEPolicy(
+            state_dim=state_dim,
+            action_dim=action_dim,
+            chunk_size=chunk_size,
+            d_model=d_model,
+            depth=depth,
+            dropout=dropout,
+            layer_norm=layer_norm,
+            residual=residual,
+            latent_dim=latent_dim,
+            beta=beta,
         )
     raise ValueError(f"Unknown policy type: {policy_type}")

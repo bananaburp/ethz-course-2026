@@ -20,23 +20,53 @@ Usage:
         --rel-coords \
         --layer-norm --residual
 
+    FULL MULTITASK
     python scripts/train.py \
         --zarr datasets/processed/multi_cube/processed_ee_full.zarr \
         --state-keys state_ee_full state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
         --action-keys action_ee_full action_gripper \
         --policy multitask --chunk-size 16 --d-model 512 --depth 4 --epochs 200
 
+    Joints MULTITASK
     python scripts/train.py \
         --zarr datasets/processed/multi_cube/processed_joints.zarr \
         --state-keys state_joints state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
         --action-keys action_joints action_gripper \
         --policy multitask --chunk-size 16 --d-model 512 --depth 4 --epochs 200
+    
+    Full CVAE + run eval
+    python scripts/train.py \
+        --zarr datasets/processed/multi_cube/processed_ee_full.zarr \
+        --state-keys state_ee_full state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
+        --action-keys action_ee_full action_gripper \
+        --policy cvae --chunk-size 16 --d-model 512 --depth 4 --epochs 200 \
+        --latent-dim 64 --beta 0.1 && python student_eval/run_eval.py \
+        --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_full_cvae.pt
+
+        
+        --layer-norm --residual
+    
+    XYZ CVAE
+    python scripts/train.py \
+        --zarr datasets/processed/multi_cube/processed_ee_xyz.zarr \
+        --state-keys state_ee_xyz state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
+        --action-keys action_ee_xyz action_gripper \
+        --policy cvae --chunk-size 16 --d-model 512 --depth 4 --epochs 200 \
+        --latent-dim 64 --beta 1 &&  python student_eval/run_eval.py \
+        --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_cvae.pt
+
+        
+        --layer-norm --residual
+
+
 """
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+
+import numpy as np
 
 import matplotlib.pyplot as plt
 import torch
@@ -53,7 +83,7 @@ from hw3.dataset import (
 from hw3.model import BasePolicy, build_policy
 
 # TODO: Any imports you want from torch or other libraries we use. Not allowed: libraries we don't use
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, WeightedRandomSampler, random_split
 
 # TODO: Choose your own hyperparameters!
 BATCH_SIZE = 64
@@ -139,7 +169,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--policy",
-        choices=["obstacle", "multitask"],
+        choices=["obstacle", "multitask", "cvae"],
         default="obstacle",
         help="Policy type: 'obstacle' for single-cube obstacle scene, 'multitask' for multicube (default: obstacle).",
     )
@@ -203,6 +233,19 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument(
+        "--latent-dim",
+        type=int,
+        default=64,
+        dest="latent_dim",
+        help="CVAE latent dimension (default: 64). Only used with --policy cvae.",
+    )
+    parser.add_argument(
+        "--beta",
+        type=float,
+        default=1.0,
+        help="KL weight for CVAE beta-VAE loss (default: 1.0). Only used with --policy cvae.",
+    )
+    parser.add_argument(
         "--filter-goal",
         type=str,
         default=None,
@@ -253,16 +296,29 @@ def main() -> None:
         )
         train_ds = SO100ChunkDataset(tr_states, tr_actions, tr_ends, chunk_size=args.chunk_size, normalizer=normalizer)
         val_ds   = SO100ChunkDataset(va_states, va_actions, va_ends, chunk_size=args.chunk_size, normalizer=normalizer)
+        _timestep_indices = train_ds.indices
+        _balance_ep_ends = tr_ends
     else:
         full_ds = SO100ChunkDataset(states, actions, ep_ends, chunk_size=args.chunk_size, normalizer=normalizer)
         n_val = max(1, int(len(full_ds) * VAL_SPLIT))
         train_ds, val_ds = random_split(
             full_ds, [len(full_ds) - n_val, n_val], generator=torch.Generator().manual_seed(args.seed)
         )
+        _timestep_indices = full_ds.indices[np.array(train_ds.indices)]
+        _balance_ep_ends = ep_ends
     print(f"Dataset: {len(train_ds)} train / {len(val_ds)} val samples, chunk_size={args.chunk_size}")
 
+    # Episode-balanced sampling: weight each window by 1/(valid windows in its episode)
+    ep_starts = np.concatenate(([0], _balance_ep_ends[:-1]))
+    ep_window_counts = np.maximum(1, _balance_ep_ends - ep_starts - args.chunk_size + 1).astype(np.float64)
+    ep_indices = np.searchsorted(_balance_ep_ends, _timestep_indices, side="right").clip(0, len(_balance_ep_ends) - 1)
+    window_weights = (1.0 / ep_window_counts[ep_indices]).astype(np.float32)
+    train_sampler = WeightedRandomSampler(
+        torch.from_numpy(window_weights), num_samples=len(train_ds), replacement=True
+    )
+
     train_loader = DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0
+        train_ds, batch_size=BATCH_SIZE, sampler=train_sampler, num_workers=0
     )
     val_loader = DataLoader(
         val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0
@@ -280,6 +336,8 @@ def main() -> None:
         dropout=args.dropout,
         layer_norm=args.layer_norm,
         residual=args.residual,
+        latent_dim=args.latent_dim,
+        beta=args.beta,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -300,6 +358,8 @@ def main() -> None:
 
     # ── training loop ─────────────────────────────────────────────────
     best_val = float("inf")
+    epochs_since_best = 0
+    early_stop_patience = max(1, EPOCHS // 5)
     train_losses: list[float] = []
     val_losses: list[float] = []
 
@@ -331,7 +391,10 @@ def main() -> None:
     save_path = ckpt_dir / save_name
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
+    kl_warmup_epochs = int(EPOCHS * 0.2)
     for epoch in range(1, EPOCHS + 1):
+        if hasattr(model, "beta") and kl_warmup_epochs > 0 and epoch <= kl_warmup_epochs:
+            model.beta = args.beta * (epoch / kl_warmup_epochs)
         train_loss = train_one_epoch(model, train_loader, optimizer, device)
         val_loss = evaluate(model, val_loader, device)
         scheduler.step()
@@ -353,8 +416,9 @@ def main() -> None:
             fig.canvas.flush_events()
 
         tag = ""
-        if val_loss < best_val:
+        if val_loss < best_val - 0.005:
             best_val = val_loss
+            epochs_since_best = 0
             torch.save(
                 {
                     "epoch": epoch,
@@ -378,6 +442,8 @@ def main() -> None:
                     "layer_norm": args.layer_norm,
                     "residual": args.residual,
                     "val_loss": val_loss,
+                    "latent_dim": args.latent_dim,
+                    "beta": args.beta,
                     "epochs": EPOCHS,
                     "batch_size": BATCH_SIZE,
                     "lr": LR,
@@ -387,12 +453,21 @@ def main() -> None:
                 save_path,
             )
             tag = " ✓ saved"
+        else:
+            epochs_since_best += 1
 
         if tag and epoch % 10 != 0:
             print(
                 f"Epoch {epoch:3d}/{EPOCHS} | "
                 f"train {train_loss:.6f} | val {val_loss:.6f}{tag}"
             )
+
+        if epochs_since_best >= early_stop_patience:
+            print(
+                f"\nEarly stopping at epoch {epoch}: no improvement for {epochs_since_best} epochs "
+                f"(patience={early_stop_patience})."
+            )
+            break
 
     print(f"\nBest val loss: {best_val:.6f}")
     print(f"Checkpoint: {save_path}")
@@ -406,7 +481,7 @@ def main() -> None:
     print(f"Loss CSV:  {csv_path}")
 
     # ── plot loss curves ───────────────────────────────────────────────
-    xs = range(1, EPOCHS + 1)
+    xs = range(1, len(train_losses) + 1)
     train_line.set_data(xs, train_losses)
     val_line.set_data(xs, val_losses)
     ax.relim()

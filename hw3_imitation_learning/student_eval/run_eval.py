@@ -9,7 +9,10 @@ Usage
     
     python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_multitask.pt
     python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_joints_multitask.pt
-    python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_full_multitask_dagger12ep.pt
+    python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_full_multitask.pt
+    
+    python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_cvae.pt
+    python student_eval/run_eval.py --exercise 3 --checkpoint ./checkpoints/multi_cube/best_model_ee_full_cvae.pt
 
 The script expects your ``model.py`` at ``hw3/model.py`` relative to the
 project root (i.e. the parent directory of ``student_eval/``).
