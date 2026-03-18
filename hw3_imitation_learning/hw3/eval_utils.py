@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+_INFER_DEBUG_DONE = False  # print inference pipeline details only on the first call
+
 import numpy as np
 import torch
 
@@ -137,6 +139,13 @@ def load_checkpoint(
     print(f"  state_keys={state_keys}, action_keys={action_keys}")
     print(f"  state_dim={state_dim}, action_dim={action_dim}, chunk_size={chunk_size}")
 
+    # Debug: normalizer stats baked into checkpoint — verify they match training output
+    print("[Normalizer from checkpoint]")
+    print(f"  action_mean: {normalizer.action_mean}")
+    print(f"  action_std:  {normalizer.action_std}")
+    print(f"  state_mean:  {normalizer.state_mean}")
+    print(f"  state_std:   {normalizer.state_std}")
+
     return model, normalizer, chunk_size, state_keys, action_keys
 
 
@@ -170,6 +179,8 @@ def infer_action_chunk(
     device: torch.device,
 ) -> np.ndarray:
     """Run one policy forward pass and return a denormalized action chunk."""
+    global _INFER_DEBUG_DONE
+
     state = obs_to_state(obs, state_keys)
     state_norm = normalizer.normalize_state(state)
     state_t = torch.from_numpy(state_norm).float().unsqueeze(0).to(device)
@@ -177,9 +188,24 @@ def infer_action_chunk(
     with torch.no_grad():
         pred = model.sample_actions(state_t)
 
-    chunk = pred.squeeze(0).cpu().numpy()
+    chunk_norm = pred.squeeze(0).cpu().numpy()   # (chunk_size, action_dim) normalized
+    chunk = chunk_norm.copy()
     for i in range(chunk.shape[0]):
         chunk[i] = normalizer.denormalize_action(chunk[i])
+
+    if not _INFER_DEBUG_DONE:
+        _INFER_DEBUG_DONE = True
+        print("\n[infer_action_chunk — first call debug]")
+        print(f"  raw state (from obs):      min={state.min():.4f}  max={state.max():.4f}")
+        print(f"  normalized state:          min={state_norm.min():.4f}  max={state_norm.max():.4f}  mean={state_norm.mean():.4f}")
+        print(f"  model output (normalized): min={chunk_norm.min():.4f}  max={chunk_norm.max():.4f}  mean={chunk_norm.mean():.4f}")
+        print(f"  denormalized chunk[0]:     {chunk[0]}")
+        print(f"  denormalized ee_xyz range over chunk: "
+              f"min={chunk[:, :3].min():.5f}  max={chunk[:, :3].max():.5f}")
+        print(f"  denormalized gripper range over chunk: "
+              f"min={chunk[:, 3].min():.4f}  max={chunk[:, 3].max():.4f}")
+        print(f"  [sanity] ee_xyz should be in ~[-0.01, 0.01], gripper in ~[-0.2, 1.3]")
+
     return chunk
 
 
