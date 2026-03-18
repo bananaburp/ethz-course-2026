@@ -17,7 +17,7 @@ Three action spaces are supported (chosen via --action-space):
 Gripper actions are stored as a separate ``action_gripper`` array in all modes.
 
 Usage examples:
-    python scripts/compute_actions.py --action-space ee --datasets-dir ./datasets/raw/multi_cube/teleop/11
+    python scripts/compute_actions.py --action-space ee --datasets-dir ./datasets/raw/multi_cube_filtered/teleop/
     python scripts/compute_actions.py --action-space ee_full --datasets-dir ./datasets/raw/multi_cube/teleop/9
     python scripts/compute_actions.py --action-space joints
     python scripts/compute_actions.py --action-space joints --datasets-dir ./datasets/raw/multi_cube

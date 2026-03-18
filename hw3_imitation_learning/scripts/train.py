@@ -20,7 +20,7 @@ MULTI-CUBE example (goal_pos MUST come before the cube blocks so --goal-permutat
 XYZ action space:
     python scripts/train.py \
         --zarr datasets/processed/multi_cube/processed_ee_xyz.zarr \
-        --state-keys state_ee_xyz state_gripper goal_pos "state_cube[:5]"\
+        --state-keys state_ee_xyz state_gripper goal_pos \
             "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" \
             state_goal \
         --action-keys action_ee_xyz action_gripper \
@@ -363,7 +363,38 @@ def main() -> None:
             action_keys=args.action_keys,
             debug=True,
         )
-    normalizer = Normalizer.from_data(states, actions)
+    # Build active-step mask: steps where the end-effector actually moves.
+    # Fit ee action std on active steps only to avoid the bimodal zero/active distribution
+    # from collapsing the std (84% near-zero, 16% near the ±10mm cap).
+    # Gripper and joint stats are computed from all steps (already well-scaled).
+    _ee_dims = {"action_ee_xyz": 3, "action_ee_full": 6, "action_gripper": 1, "action_joints": 5}
+    _ee_col_start, _ee_col_end = 0, 0
+    _col = 0
+    for _spec in (args.action_keys or []):
+        _name = _spec.split("[")[0]
+        _d = _ee_dims.get(_name, 0)
+        if _name in ("action_ee_xyz", "action_ee_full"):
+            _ee_col_start, _ee_col_end = _col, _col + _d
+            break
+        _col += _d
+
+    EE_XYZ_THRESH = 0.001   # 1 mm — cleanly splits zero cluster from active cluster
+    if _ee_col_end > _ee_col_start:
+        ee_mask = np.linalg.norm(actions[:, _ee_col_start:_ee_col_start + 3], axis=1) > EE_XYZ_THRESH
+        n_active = int(ee_mask.sum())
+        print(f"  Active steps for ee normalizer: {n_active}/{len(actions)} "
+              f"({100*n_active/len(actions):.1f}%)  [cols {_ee_col_start}:{_ee_col_end}]")
+        action_mean = actions.mean(axis=0)
+        action_std  = actions.std(axis=0)
+        action_std[_ee_col_start:_ee_col_end] = actions[ee_mask, _ee_col_start:_ee_col_end].std(axis=0)
+    else:
+        print("  No ee action key found — using standard normalization for all action dims.")
+        action_mean = actions.mean(axis=0)
+        action_std  = actions.std(axis=0)
+    action_std  = np.maximum(action_std, 1e-6)
+    state_mean  = states.mean(axis=0)
+    state_std   = np.maximum(states.std(axis=0), 1e-6)
+    normalizer  = Normalizer(state_mean, state_std, action_mean, action_std)
 
     print(f"  state_dim={states.shape[1]}, action_dim={actions.shape[1]}")
 
@@ -405,7 +436,7 @@ def main() -> None:
     else:
         if args.goal_permutation:
             print("Warning: --goal-permutation requires --episode-split. Disabling augmentation.")
-            args.goal_permutation = False
+            # args.goal_permutation = False
         full_ds = SO100ChunkDataset(states, actions, ep_ends, chunk_size=args.chunk_size, normalizer=normalizer)
         n_val = max(1, int(len(full_ds) * VAL_SPLIT))
         train_ds, val_ds = random_split(
@@ -505,7 +536,7 @@ def main() -> None:
         val_losses.append(val_loss)
 
         tag = ""
-        if best_val - val_loss > 0.005:
+        if best_val - val_loss > 0.001:
             best_val = val_loss
             no_improve_count = 0
             torch.save(
@@ -546,7 +577,7 @@ def main() -> None:
         )
 
         if no_improve_count >= patience:
-            print(f"\nEarly stopping at epoch {epoch} (no improvement > 0.005 for {patience} epochs)")
+            print(f"\nEarly stopping at epoch {epoch} (no improvement > 0.001 for {patience} epochs)")
             break
 
     print(f"\nBest val loss: {best_val:.6f}")

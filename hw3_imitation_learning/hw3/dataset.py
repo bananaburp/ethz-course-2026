@@ -25,11 +25,19 @@ class Normalizer:
         return np.maximum(std, eps)
 
     @classmethod
-    def from_data(cls, states: np.ndarray, actions: np.ndarray) -> "Normalizer":
+    def from_data(
+        cls,
+        states: np.ndarray,
+        actions: np.ndarray,
+        active_mask: np.ndarray | None = None,
+    ) -> "Normalizer":
         state_mean = states.mean(axis=0)
         state_std = cls._safe_std(states.std(axis=0))
-        action_mean = actions.mean(axis=0)
-        action_std = cls._safe_std(actions.std(axis=0))
+        # Fit action statistics only on active steps when a mask is provided.
+        # This prevents near-zero "stationary" steps from collapsing the std.
+        action_rows = actions[active_mask] if active_mask is not None else actions
+        action_mean = action_rows.mean(axis=0)
+        action_std = cls._safe_std(action_rows.std(axis=0))
         return cls(state_mean, state_std, action_mean, action_std)
 
     def normalize_state(self, state: np.ndarray) -> np.ndarray:
@@ -274,7 +282,10 @@ def episode_train_val_split(
     return _extract(train_idx), _extract(val_idx)
 
 
-def build_valid_indices(episode_ends: np.ndarray, chunk_size: int) -> np.ndarray:
+def build_valid_indices(
+    episode_ends: np.ndarray,
+    chunk_size: int,
+) -> np.ndarray:
     """Return flat indices where a full action chunk of length ``chunk_size`` fits.
 
     For each episode [start, end) we keep indices start … (end - chunk_size).
@@ -285,7 +296,8 @@ def build_valid_indices(episode_ends: np.ndarray, chunk_size: int) -> np.ndarray
         last_start = end - chunk_size
         if last_start < start:
             continue
-        indices.extend(range(start, last_start + 1))
+        for t in range(start, last_start + 1):
+            indices.append(t)
     return np.asarray(indices, dtype=np.int64)
 
 
