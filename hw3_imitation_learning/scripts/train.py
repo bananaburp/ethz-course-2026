@@ -15,6 +15,15 @@ Usage:
         --state-keys state_ee_full state_gripper "state_cube[:5]"  \
         --action-keys action_ee_full action_gripper \
         --policy obstacle --chunk-size 16 --d-model 512 --depth 4
+        
+XYZ action space:
+    python scripts/train.py \
+        --zarr datasets/processed/multi_cube/processed_ee_xyz.zarr \
+        --state-keys state_ee_xyz state_gripper goal_pos \
+            "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" \
+            state_goal \
+        --action-keys action_ee_xyz action_gripper \
+        --policy multitask --chunk-size 16 --d-model 512 --depth 4
 """
 
 from __future__ import annotations
