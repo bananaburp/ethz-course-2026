@@ -6,7 +6,7 @@ multicube goal-conditioned setup.
 Usage:
     python scripts/eval.py \
         --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_multitask.pt \
-        --multicube \
+        --multicube --no-shuffle\
         --num-episodes 50 \
         --headless \
 """

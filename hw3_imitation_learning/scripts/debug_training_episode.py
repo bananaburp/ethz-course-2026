@@ -7,11 +7,14 @@ Usage:
     python scripts/debug_training_episode.py \
         --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_multitask.pt \
         --zarr datasets/processed/multi_cube/processed_ee_xyz.zarr \
-        --episode 0
+        --episode 50 --csv-save debug_eps0.csv --n-infer 10 --plot-dim 2
+
+    Omit --episode to plot the mean over all episodes.
 """
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -73,6 +76,28 @@ def plot_action_dim(
     plt.close(fig)
 
 
+def save_records_csv(records: list[dict], path: Path) -> None:
+    """Write per-inference-call stats to a tidy CSV.
+
+    Columns: infer_call, action_dim, pred_min, pred_mean, pred_max,
+             gt_min, gt_mean, gt_max
+    """
+    action_dim = len(records[0]["pred_min"])
+    with path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["infer_call", "action_dim",
+                         "pred_min", "pred_mean", "pred_max",
+                         "gt_min", "gt_mean", "gt_max"])
+        for call_i, rec in enumerate(records, start=1):
+            for d in range(action_dim):
+                writer.writerow([
+                    call_i, d,
+                    rec["pred_min"][d], rec["pred_mean"][d], rec["pred_max"][d],
+                    rec["gt_min"][d],   rec["gt_mean"][d],   rec["gt_max"][d],
+                ])
+    print(f"CSV saved: {path}")
+
+
 def print_episode_debug(
     states_raw: np.ndarray,       # (T, state_dim) raw (unnormalised)
     actions_raw: np.ndarray,      # (T, action_dim) raw (unnormalised)
@@ -82,6 +107,7 @@ def print_episode_debug(
     state_keys: list[str],
     device: torch.device,
     n_infer: int = 3,
+    verbose: bool = True,
 ) -> list[dict]:
     T = states_raw.shape[0]
     action_dim = actions_raw.shape[1]
@@ -131,9 +157,10 @@ def print_episode_debug(
     if len(per_dim_labels) != state_dim:
         per_dim_labels = [f"dim_{i}" for i in range(state_dim)]
 
-    print(f"  action normalizer per dim (mean / std):")
-    for d in range(action_dim):
-        print(f"    dim {d:2d}: mean={normalizer.action_mean[d]:+.5f}  std={normalizer.action_std[d]:.5f}")
+    if verbose:
+        print(f"  action normalizer per dim (mean / std):")
+        for d in range(action_dim):
+            print(f"    dim {d:2d}: mean={normalizer.action_mean[d]:+.5f}  std={normalizer.action_std[d]:.5f}")
 
     records: list[dict] = []
     infer_count = 0
@@ -152,33 +179,34 @@ def print_episode_debug(
             chunk_denorm[i] = normalizer.denormalize_action(chunk_norm[i])
 
         infer_count += 1
-        print(f"\n[infer call {infer_count}]  state: min={state_raw.min():.3f}  max={state_raw.max():.3f}"
-              f"  norm: min={state_norm.min():.3f}  max={state_norm.max():.3f}  mean={state_norm.mean():.3f}")
-        # print(f"  --- state input ---")
-        # for dim_i, label in enumerate(per_dim_labels):
-        #     print(f"    [{dim_i:3d}] {label:<42s}  raw={state_raw[dim_i]:+.6f}  norm={state_norm[dim_i]:+.6f}")
-
-        print(f"  --- predicted action chunk ---")
-        print(f"  {'dim':<4}  {'norm_min':>9}  {'norm_mean':>9}  {'norm_max':>9}  |"
-              f"  {'denorm_min':>11}  {'denorm_mean':>11}  {'denorm_max':>11}")
-        for d in range(action_dim):
-            nv = chunk_norm[:, d]
-            dv = chunk_denorm[:, d]
-            print(f"  {d:<4}  {nv.min():>+9.4f}  {nv.mean():>+9.4f}  {nv.max():>+9.4f}  |"
-                  f"  {dv.min():>+11.5f}  {dv.mean():>+11.5f}  {dv.max():>+11.5f}")
-
-        # Print GT action chunk for comparison
         gt_end = min(step + chunk_size, T)
         gt_chunk = actions_raw[step:gt_end]   # raw (unnormalised)
         gt_norm = np.stack([normalizer.normalize_action(gt_chunk[i]) for i in range(len(gt_chunk))])
-        print(f"  --- ground truth action chunk (steps {step}–{gt_end-1}) ---")
-        print(f"  {'dim':<4}  {'norm_min':>9}  {'norm_mean':>9}  {'norm_max':>9}  |"
-              f"  {'raw_min':>11}  {'raw_mean':>11}  {'raw_max':>11}")
-        for d in range(action_dim):
-            nv = gt_norm[:, d]
-            rv = gt_chunk[:, d]
-            print(f"  {d:<4}  {nv.min():>+9.4f}  {nv.mean():>+9.4f}  {nv.max():>+9.4f}  |"
-                  f"  {rv.min():>+11.5f}  {rv.mean():>+11.5f}  {rv.max():>+11.5f}")
+
+        if verbose:
+            print(f"\n[infer call {infer_count}]  state: min={state_raw.min():.3f}  max={state_raw.max():.3f}"
+                  f"  norm: min={state_norm.min():.3f}  max={state_norm.max():.3f}  mean={state_norm.mean():.3f}")
+            # print(f"  --- state input ---")
+            # for dim_i, label in enumerate(per_dim_labels):
+            #     print(f"    [{dim_i:3d}] {label:<42s}  raw={state_raw[dim_i]:+.6f}  norm={state_norm[dim_i]:+.6f}")
+
+            print(f"  --- predicted action chunk ---")
+            print(f"  {'dim':<4}  {'norm_min':>9}  {'norm_mean':>9}  {'norm_max':>9}  |"
+                  f"  {'denorm_min':>11}  {'denorm_mean':>11}  {'denorm_max':>11}")
+            for d in range(action_dim):
+                nv = chunk_norm[:, d]
+                dv = chunk_denorm[:, d]
+                print(f"  {d:<4}  {nv.min():>+9.4f}  {nv.mean():>+9.4f}  {nv.max():>+9.4f}  |"
+                      f"  {dv.min():>+11.5f}  {dv.mean():>+11.5f}  {dv.max():>+11.5f}")
+
+            print(f"  --- ground truth action chunk (steps {step}–{gt_end-1}) ---")
+            print(f"  {'dim':<4}  {'norm_min':>9}  {'norm_mean':>9}  {'norm_max':>9}  |"
+                  f"  {'raw_min':>11}  {'raw_mean':>11}  {'raw_max':>11}")
+            for d in range(action_dim):
+                nv = gt_norm[:, d]
+                rv = gt_chunk[:, d]
+                print(f"  {d:<4}  {nv.min():>+9.4f}  {nv.mean():>+9.4f}  {nv.max():>+9.4f}  |"
+                      f"  {rv.min():>+11.5f}  {rv.mean():>+11.5f}  {rv.max():>+11.5f}")
 
         records.append({
             "pred_min":  chunk_denorm.min(axis=0),
@@ -194,14 +222,30 @@ def print_episode_debug(
     return records
 
 
+def mean_records(all_records: list[list[dict]]) -> list[dict]:
+    """Average per-inference-call records across episodes.
+
+    Episodes with fewer inference calls than the maximum are skipped for the
+    later calls (i.e. we only average over episodes that have a given call).
+    """
+    max_calls = max(len(r) for r in all_records)
+    averaged: list[dict] = []
+    for i in range(max_calls):
+        ep_recs = [r[i] for r in all_records if i < len(r)]
+        keys = list(ep_recs[0].keys())
+        averaged.append({k: np.mean(np.stack([r[k] for r in ep_recs]), axis=0) for k in keys})
+    return averaged
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Debug print from training data episode.")
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--zarr", type=Path, required=True)
-    parser.add_argument("--episode", type=int, default=0, help="Episode index (default: 0)")
-    parser.add_argument("--n-infer", type=int, default=30, help="Number of inference calls to print (default: 3)")
+    parser.add_argument("--episode", type=int, default=None, help="Episode index (default: mean over all episodes)")
+    parser.add_argument("--n-infer", type=int, default=5, help="Number of inference calls to print (default: 3)")
     parser.add_argument("--plot-dim", type=int, default=None, help="Action dim to plot (omit to skip plotting)")
     parser.add_argument("--plot-save", type=Path, default=None, help="Save plot to path instead of showing")
+    parser.add_argument("--csv-save", type=Path, default=None, help="Save per-inference-call stats to a CSV file")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -215,24 +259,42 @@ def main() -> None:
         debug=False,
     )
 
-    # Extract episode slice
+    # Extract episode slice(s)
     ep_starts = np.concatenate([[0], ep_ends[:-1]])
     n_eps = len(ep_ends)
-    if args.episode >= n_eps:
-        print(f"Episode {args.episode} out of range (dataset has {n_eps} episodes). Using 0.")
-        ep_idx = 0
-    else:
-        ep_idx = args.episode
-    t0, t1 = int(ep_starts[ep_idx]), int(ep_ends[ep_idx])
-    ep_states = states[t0:t1]
-    ep_actions = actions[t0:t1]
 
-    print(f"\n═══ Episode {ep_idx} ({t1 - t0} steps) ═══\n")
-    records = print_episode_debug(
-        ep_states, ep_actions,
-        model, normalizer, chunk_size, state_keys, device,
-        n_infer=args.n_infer,
-    )
+    if args.episode is None:
+        # Mean over all episodes
+        print(f"\n═══ Mean over all {n_eps} episodes ═══\n")
+        all_records: list[list[dict]] = []
+        for ep_idx in range(n_eps):
+            t0, t1 = int(ep_starts[ep_idx]), int(ep_ends[ep_idx])
+            ep_records = print_episode_debug(
+                states[t0:t1], actions[t0:t1],
+                model, normalizer, chunk_size, state_keys, device,
+                n_infer=args.n_infer,
+                verbose=False,
+            )
+            if ep_records:
+                all_records.append(ep_records)
+        records = mean_records(all_records)
+        print(f"Averaged {len(all_records)} episodes, {len(records)} inference calls each (max).")
+    else:
+        if args.episode >= n_eps:
+            print(f"Episode {args.episode} out of range (dataset has {n_eps} episodes). Using 0.")
+            ep_idx = 0
+        else:
+            ep_idx = args.episode
+        t0, t1 = int(ep_starts[ep_idx]), int(ep_ends[ep_idx])
+        print(f"\n═══ Episode {ep_idx} ({t1 - t0} steps) ═══\n")
+        records = print_episode_debug(
+            states[t0:t1], actions[t0:t1],
+            model, normalizer, chunk_size, state_keys, device,
+            n_infer=args.n_infer,
+        )
+
+    if args.csv_save is not None:
+        save_records_csv(records, args.csv_save)
 
     if args.plot_dim is not None:
         plot_action_dim(records, dim=args.plot_dim, save_path=args.plot_save)

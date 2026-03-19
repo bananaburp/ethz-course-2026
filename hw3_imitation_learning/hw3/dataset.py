@@ -30,14 +30,27 @@ class Normalizer:
         states: np.ndarray,
         actions: np.ndarray,
         active_mask: np.ndarray | None = None,
+        method: str = "zscore",
     ) -> "Normalizer":
-        state_mean = states.mean(axis=0)
-        state_std = cls._safe_std(states.std(axis=0))
         # Fit action statistics only on active steps when a mask is provided.
         # This prevents near-zero "stationary" steps from collapsing the std.
         action_rows = actions[active_mask] if active_mask is not None else actions
-        action_mean = action_rows.mean(axis=0)
-        action_std = cls._safe_std(action_rows.std(axis=0))
+        if method == "minmax":
+            # Normalize each dim to [-1, 1] using 1st/99th percentile bounds.
+            # Equivalent to z-score with mean=(p99+p1)/2 and std=(p99-p1)/2.
+            s_lo = np.percentile(states, 1, axis=0)
+            s_hi = np.percentile(states, 99, axis=0)
+            state_mean = (s_hi + s_lo) / 2.0
+            state_std = cls._safe_std((s_hi - s_lo) / 2.0)
+            a_lo = np.percentile(action_rows, 1, axis=0)
+            a_hi = np.percentile(action_rows, 99, axis=0)
+            action_mean = (a_hi + a_lo) / 2.0
+            action_std = cls._safe_std((a_hi - a_lo) / 2.0)
+        else:
+            state_mean = states.mean(axis=0)
+            state_std = cls._safe_std(states.std(axis=0))
+            action_mean = action_rows.mean(axis=0)
+            action_std = cls._safe_std(action_rows.std(axis=0))
         return cls(state_mean, state_std, action_mean, action_std)
 
     def normalize_state(self, state: np.ndarray) -> np.ndarray:

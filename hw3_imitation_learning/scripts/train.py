@@ -25,7 +25,7 @@ XYZ action space:
             state_goal \
         --action-keys action_ee_xyz action_gripper \
         --policy multitask --chunk-size 16 --d-model 512 --depth 4 \
-        --goal-permutation --episode-split
+        --no-active-mask --goal-permutation --norm-method minmax 
 
 FULL action space:
     python scripts/train.py \
@@ -327,7 +327,19 @@ def main() -> None:
         default=False,
         help="Split by whole episodes (default). Use --no-episode-split for random timestep split.",
     )
+    parser.add_argument(
+        "--norm-method",
+        default="zscore",
+        choices=["zscore", "minmax"],
+        help="Normalization method: zscore (default) or minmax (per-dim to [-1,1] via p1/p99 bounds).",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument(
+        "--no-active-mask",
+        action="store_true",
+        default=False,
+        help="Disable active-step mask for ee normalizer (use all steps instead).",
+    )
     parser.add_argument(
         "--vis-every",
         type=int,
@@ -379,26 +391,20 @@ def main() -> None:
         _col += _d
 
     EE_XYZ_THRESH = 0.001   # 1 mm — cleanly splits zero cluster from active cluster
-    if _ee_col_end > _ee_col_start:
+    if _ee_col_end > _ee_col_start and not args.no_active_mask:
         ee_mask = np.linalg.norm(actions[:, _ee_col_start:_ee_col_start + 3], axis=1) > EE_XYZ_THRESH
         n_active = int(ee_mask.sum())
         print(f"  Active steps for ee normalizer: {n_active}/{len(actions)} "
               f"({100*n_active/len(actions):.1f}%)  [cols {_ee_col_start}:{_ee_col_end}]")
-        action_mean = actions.mean(axis=0)
-        action_std  = actions.std(axis=0)
-        active_ee = actions[ee_mask, _ee_col_start:_ee_col_end]
-        action_mean[_ee_col_start:_ee_col_end] = active_ee.mean(axis=0)
-        action_std[_ee_col_start:_ee_col_end]  = active_ee.std(axis=0)
-        print(f"  EE active-step mean: {action_mean[_ee_col_start:_ee_col_end]}")
-        print(f"  EE active-step std:  {action_std[_ee_col_start:_ee_col_end]}")
+        active_mask = ee_mask
     else:
-        print("  No ee action key found — using standard normalization for all action dims.")
-        action_mean = actions.mean(axis=0)
-        action_std  = actions.std(axis=0)
-    action_std  = np.maximum(action_std, 1e-6)
-    state_mean  = states.mean(axis=0)
-    state_std   = np.maximum(states.std(axis=0), 1e-6)
-    normalizer  = Normalizer(state_mean, state_std, action_mean, action_std)
+        if args.no_active_mask:
+            print("  Active-step mask disabled (--no-active-mask) — using all steps for normalization.")
+        else:
+            print("  No ee action key found — using standard normalization for all action dims.")
+        active_mask = None
+    print(f"  Norm method: {args.norm_method}")
+    normalizer = Normalizer.from_data(states, actions, active_mask=active_mask, method=args.norm_method)
 
     print(f"  state_dim={states.shape[1]}, action_dim={actions.shape[1]}")
 
