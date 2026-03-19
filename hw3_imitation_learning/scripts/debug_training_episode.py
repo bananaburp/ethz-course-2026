@@ -7,6 +7,7 @@ Usage:
     python scripts/debug_training_episode.py \
         --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_multitask.pt \
         --zarr datasets/processed/multi_cube/processed_ee_xyz.zarr \
+        --n-infer 100 --csv-save debug_all_eps.csv
         --episode 50 --csv-save debug_eps0.csv --n-infer 10 --plot-dim 2
 
     Omit --episode to plot the mean over all episodes.
