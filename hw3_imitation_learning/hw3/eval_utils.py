@@ -15,7 +15,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_INFER_DEBUG_DONE = False  # print inference pipeline details only on the first call
+_INFER_DEBUG_COUNT = 0   # print per-dim inference details for first N calls
+_N_INFER_DEBUG = 3
+_APPLY_DEBUG_COUNT = 0   # print mocap vs actual-EE drift for first N apply calls
+_N_APPLY_DEBUG = 30
 
 import numpy as np
 import torch
@@ -139,12 +142,9 @@ def load_checkpoint(
     print(f"  state_keys={state_keys}, action_keys={action_keys}")
     print(f"  state_dim={state_dim}, action_dim={action_dim}, chunk_size={chunk_size}")
 
-    # Debug: normalizer stats baked into checkpoint — verify they match training output
-    print("[Normalizer from checkpoint]")
-    print(f"  action_mean: {normalizer.action_mean}")
-    print(f"  action_std:  {normalizer.action_std}")
-    print(f"  state_mean:  {normalizer.state_mean}")
-    print(f"  state_std:   {normalizer.state_std}")
+    print("  action normalizer per dim (mean / std):")
+    for d in range(len(normalizer.action_mean)):
+        print(f"    dim {d:2d}: mean={normalizer.action_mean[d]:+.5f}  std={normalizer.action_std[d]:.5f}")
 
     return model, normalizer, chunk_size, state_keys, action_keys
 
@@ -157,6 +157,16 @@ def obs_to_state(obs: dict[str, np.ndarray], state_keys: list[str]) -> np.ndarra
     parts: list[np.ndarray] = []
     for spec in state_keys:
         name, col_slice = parse_key_spec(spec)
+        if name == "_rel_goal_pos":
+            # Synthetic feature: goal_pos - ee_pos (bin offset relative to end-effector)
+            rel = (obs["goal_pos"][:3] - obs["ee_pos"][:3]).astype(np.float32)
+            parts.append(rel[col_slice] if col_slice != slice(None) else rel)
+            continue
+        if name == "_rel_cube_pos":
+            # Synthetic feature: cube_xyz - ee_xyz (target cube offset relative to end-effector)
+            rel = (obs["cube"][:3] - obs["ee_pos"][:3]).astype(np.float32)
+            parts.append(rel[col_slice] if col_slice != slice(None) else rel)
+            continue
         if name not in ZARR_KEY_TO_OBS:
             raise ValueError(
                 f"Unknown state key '{name}'. Known keys: {list(ZARR_KEY_TO_OBS)}"
@@ -179,7 +189,7 @@ def infer_action_chunk(
     device: torch.device,
 ) -> np.ndarray:
     """Run one policy forward pass and return a denormalized action chunk."""
-    global _INFER_DEBUG_DONE
+    global _INFER_DEBUG_COUNT
 
     state = obs_to_state(obs, state_keys)
     state_norm = normalizer.normalize_state(state)
@@ -193,18 +203,35 @@ def infer_action_chunk(
     for i in range(chunk.shape[0]):
         chunk[i] = normalizer.denormalize_action(chunk[i])
 
-    if not _INFER_DEBUG_DONE:
-        _INFER_DEBUG_DONE = True
-        print("\n[infer_action_chunk — first call debug]")
-        print(f"  raw state (from obs):      min={state.min():.4f}  max={state.max():.4f}")
-        print(f"  normalized state:          min={state_norm.min():.4f}  max={state_norm.max():.4f}  mean={state_norm.mean():.4f}")
-        print(f"  model output (normalized): min={chunk_norm.min():.4f}  max={chunk_norm.max():.4f}  mean={chunk_norm.mean():.4f}")
-        print(f"  denormalized chunk[0]:     {chunk[0]}")
-        print(f"  denormalized ee_xyz range over chunk: "
-              f"min={chunk[:, :3].min():.5f}  max={chunk[:, :3].max():.5f}")
-        print(f"  denormalized gripper range over chunk: "
-              f"min={chunk[:, 3].min():.4f}  max={chunk[:, 3].max():.4f}")
-        print(f"  [sanity] ee_xyz should be in ~[-0.01, 0.01], gripper in ~[-0.2, 1.3]")
+    if _INFER_DEBUG_COUNT < _N_INFER_DEBUG:
+        _INFER_DEBUG_COUNT += 1
+        action_dim = chunk.shape[1]
+        print(f"\n[infer call {_INFER_DEBUG_COUNT}]  state: min={state.min():.3f}  max={state.max():.3f}"
+              f"  norm: min={state_norm.min():.3f}  max={state_norm.max():.3f}  mean={state_norm.mean():.3f}")
+
+        # Per-dim state: raw value + normalized value, labelled by key
+        print(f"  --- state input ---")
+        col = 0
+        for spec in state_keys:
+            name, col_slice = parse_key_spec(spec)
+            if name == "_rel_goal_pos":
+                raw_part = (obs["goal_pos"][:3] - obs["ee_pos"][:3]).astype(np.float32)
+            else:
+                raw_part = ZARR_KEY_TO_OBS[name](obs).astype(np.float32)
+                if name == "state_joints":
+                    raw_part = raw_part[:5]
+            raw_part = raw_part[col_slice] if col_slice != slice(None) else raw_part
+            for i, v in enumerate(raw_part.flat):
+                print(f"    [{col:3d}] {spec}[{i}]  raw={v:+.6f}  norm={state_norm[col]:+.6f}")
+                col += 1
+
+        print(f"  --- predicted action chunk ---")
+        print(f"  {'dim':<4}  {'norm_min':>9}  {'norm_mean':>9}  {'norm_max':>9}  |  {'denorm_min':>11}  {'denorm_mean':>11}  {'denorm_max':>11}")
+        for d in range(action_dim):
+            n_v = chunk_norm[:, d]
+            d_v = chunk[:, d]
+            print(f"  {d:<4}  {n_v.min():>+9.4f}  {n_v.mean():>+9.4f}  {n_v.max():>+9.4f}  |  "
+                  f"{d_v.min():>+11.5f}  {d_v.mean():>+11.5f}  {d_v.max():>+11.5f}")
 
     return chunk
 
@@ -252,8 +279,18 @@ def apply_action(env: SO100SimEnv, action: np.ndarray, action_keys: list[str]) -
             full_vec = segment
 
         if name == "action_ee_xyz":
+            global _APPLY_DEBUG_COUNT
+            actual_ee = env.get_ee_pos()
             current_target = env.data.mocap_pos[env.mocap_id].copy()
-            env.set_mocap_pos(current_target + full_vec[:3])
+            if _APPLY_DEBUG_COUNT < _N_APPLY_DEBUG:
+                drift = current_target - actual_ee
+                print(f"[apply step {_APPLY_DEBUG_COUNT:3d}]  mocap={current_target}  "
+                      f"actual_ee={actual_ee}  drift={drift}  delta={full_vec[:3]}")
+                _APPLY_DEBUG_COUNT += 1
+            # Fix: apply delta relative to actual EE, not mocap target.
+            # Training actions were computed as actual_EE[t+1] - actual_EE[t],
+            # so the correct base for the delta is the current actual EE position.
+            env.set_mocap_pos(actual_ee + full_vec[:3])
         elif name == "action_ee_full":
             current_pos_target = env.data.mocap_pos[env.mocap_id].copy()
             current_quat_target = env.data.mocap_quat[env.mocap_id].copy()

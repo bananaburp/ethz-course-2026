@@ -386,7 +386,11 @@ def main() -> None:
               f"({100*n_active/len(actions):.1f}%)  [cols {_ee_col_start}:{_ee_col_end}]")
         action_mean = actions.mean(axis=0)
         action_std  = actions.std(axis=0)
-        action_std[_ee_col_start:_ee_col_end] = actions[ee_mask, _ee_col_start:_ee_col_end].std(axis=0)
+        active_ee = actions[ee_mask, _ee_col_start:_ee_col_end]
+        action_mean[_ee_col_start:_ee_col_end] = active_ee.mean(axis=0)
+        action_std[_ee_col_start:_ee_col_end]  = active_ee.std(axis=0)
+        print(f"  EE active-step mean: {action_mean[_ee_col_start:_ee_col_end]}")
+        print(f"  EE active-step std:  {action_std[_ee_col_start:_ee_col_end]}")
     else:
         print("  No ee action key found — using standard normalization for all action dims.")
         action_mean = actions.mean(axis=0)

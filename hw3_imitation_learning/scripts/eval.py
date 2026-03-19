@@ -7,7 +7,7 @@ Usage:
     python scripts/eval.py \
         --checkpoint ./checkpoints/multi_cube/best_model_ee_xyz_multitask.pt \
         --multicube \
-        --num-episodes 20 \
+        --num-episodes 50 \
         --headless \
 """
 
