@@ -129,17 +129,17 @@ class ObstaclePolicy(BasePolicy):
 #                 x = F.dropout(x, p=self.dropout_p, training=True)
 #         return x.view(x.size(0), self.chunk_size, self.action_dim)
 
-class _ResidualBlock(nn.Module):
-    """Linear -> LayerNorm -> ReLU -> Dropout with a skip connection."""
-
-    def __init__(self, d_model: int, dropout: float) -> None:
+class _FFBlock(nn.Module):
+    def __init__(self, hidden_dim: int, p_drop: float) -> None:
         super().__init__()
-        self.linear = nn.Linear(d_model, d_model)
-        self.norm = nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(hidden_dim, hidden_dim)
+        self.ln = nn.LayerNorm(hidden_dim)
+        self.drop = nn.Dropout(p_drop)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.dropout(torch.relu(self.norm(self.linear(x))))
+        h = F.relu(self.ln(self.fc(x)))
+        return x + self.drop(h)
+
 
 class MultiTaskPolicy(BasePolicy):
     """Goal-conditioned policy for the multicube scene."""
@@ -157,30 +157,26 @@ class MultiTaskPolicy(BasePolicy):
         self.d_model = d_model
         self.depth = depth
 
-        self.input = nn.Sequential(
-            nn.Linear(state_dim, d_model),
-            nn.LayerNorm(d_model),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-        )
+        self.stem = nn.Linear(state_dim, d_model)
+        self.stem_norm = nn.LayerNorm(d_model)
+        self.stem_drop = nn.Dropout(dropout)
 
-        self.blocks = nn.Sequential(
-            *[_ResidualBlock(d_model, dropout) for _ in range(depth)]
+        self.tower = nn.ModuleList(
+            [_FFBlock(d_model, dropout) for _ in range(depth)]
         )
-        self.output = nn.Linear(d_model, chunk_size * action_dim)
+        self.head = nn.Linear(d_model, chunk_size * action_dim)
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
-        x = self.input(state)
-        x = self.blocks(x)
-        x = self.output(x)
-        return x.reshape(-1, self.chunk_size, self.action_dim)
+        x = self.stem_drop(F.relu(self.stem_norm(self.stem(state))))
+        for blk in self.tower:
+            x = blk(x)
+        return self.head(x).view(state.size(0), self.chunk_size, self.action_dim)
 
     def compute_loss(
         self, state: torch.Tensor, action_chunk: torch.Tensor
     ) -> torch.Tensor:
-        pred = self.forward(state)
-        return nn.functional.mse_loss(pred, action_chunk)
+        return F.mse_loss(self.forward(state), action_chunk)
 
     def sample_actions(self, state: torch.Tensor) -> torch.Tensor:
         return self.forward(state)
