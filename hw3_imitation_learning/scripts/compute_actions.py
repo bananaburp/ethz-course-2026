@@ -21,6 +21,8 @@ Usage examples:
     python scripts/compute_actions.py --action-space ee_full --datasets-dir ./datasets/raw/multi_cube/teleop
     python scripts/compute_actions.py --action-space joints --datasets-dir ./datasets/raw/multi_cube/teleop
 
+    python scripts/compute_actions.py --action-space ee --datasets-dir ./datasets/raw/single_cube/teleop_rowla
+
 """
 
 from __future__ import annotations

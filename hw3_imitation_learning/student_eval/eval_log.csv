@@ -39,3 +39,5 @@ timestamp,exercise,success_rate,score,chunk_size,d_model,depth,dropout,best_epoc
 2026-03-17T17:47:06,3,0.11,11.0,16,512,4,0.1,126,0.6814606189727783,200,64,0.001,0.15,/Volumes/T9/DevSpace/Github/robot-learning/hw3_imitation_learning/checkpoints/multi_cube/best_model_ee_full_cvae.pt
 2026-03-17T17:51:53,3,0.05,5.0,16,512,4,0.1,167,0.6708884239196777,200,64,0.001,0.15,/Volumes/T9/DevSpace/Github/robot-learning/hw3_imitation_learning/checkpoints/multi_cube/best_model_ee_full_cvae.pt
 2026-03-17T18:19:43,3,0.0,0.0,16,512,4,0.1,161,0.2471259349868411,200,64,0.001,0.15,/Volumes/T9/DevSpace/Github/robot-learning/hw3_imitation_learning/checkpoints/multi_cube/best_model_ee_full_cvae.pt
+2026-03-20T10:46:36,1,0.61,40.0,16,384,4,0.1,60,0.4932916026849013,100,64,0.001,0.15,/Volumes/T9/DevSpace/Github/robot-learning/hw3_imitation_learning/checkpoints/single_cube/best_model_ee_xyz_obstacle.pt
+2026-03-20T10:47:44,1,0.54,20.0,16,384,4,0.1,77,0.4880698758822221,100,64,0.001,0.15,/Volumes/T9/DevSpace/Github/robot-learning/hw3_imitation_learning/checkpoints/single_cube/best_model_ee_xyz_obstacle.pt
