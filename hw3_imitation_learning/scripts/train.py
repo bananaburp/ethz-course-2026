@@ -3,27 +3,25 @@
 Imports a model from hw3.model and trains it on
 state -> action-chunk prediction using the processed zarr dataset.
 
-Usage:  
-    python scripts/train.py \
-    --zarr datasets/processed/single_cube/processed_ee_xyz.zarr \
-    --state-keys state_ee_xyz state_gripper "state_cube[:5]"  \
-    --action-keys action_ee_xyz action_gripper \
-    --policy obstacle --chunk-size 16 --d-model 512 --depth 4
-    
-    python scripts/train.py \
-        --zarr datasets/processed/single_cube/processed_ee_full.zarr \
-        --state-keys state_ee_full state_gripper "state_cube[:5]"  \
-        --action-keys action_ee_full action_gripper \
-        --policy obstacle --chunk-size 16 --d-model 512 --depth 4
+Usage:
+    python scripts/train.py --zarr datasets/processed/single_cube/processed_ee_xyz.zarr \
+        --state-keys ... \
+        --action-keys ...
         
-XYZ action space:
-    python scripts/train.py \
-        --zarr datasets/processed/multi_cube/processed_ee_xyz.zarr \
-        --state-keys state_ee_xyz state_gripper goal_pos \
-            "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" \
-            state_goal \
+    python scripts/train.py --zarr datasets/processed/multi_cube/processed_ee_xyz.zarr \
+        --policy multitask \
+        --state-keys state_ee_xyz state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
         --action-keys action_ee_xyz action_gripper \
-        --policy multitask --chunk-size 16 --d-model 512 --depth 4
+        --epochs 200 \
+        --d-model 512
+        
+    python scripts/train.py --zarr datasets/processed/multi_cube/processed_ee_full.zarr \
+        --policy multitask \
+        --state-keys state_ee_full state_gripper "original_pos_cube_red[:3]" "original_pos_cube_green[:3]" "original_pos_cube_blue[:3]" state_goal goal_pos \
+        --action-keys action_ee_full action_gripper \
+        --epochs 200 \
+        --d-model 512
+
 """
 
 from __future__ import annotations
@@ -35,22 +33,20 @@ import matplotlib.pyplot as plt
 import torch
 import zarr as zarr_lib
 from hw3.dataset import (
+    MultiCubeAugDataset,
     Normalizer,
     SO100ChunkDataset,
-    episode_train_val_split,
+    compute_state_column_ranges,
     load_and_merge_zarrs,
     load_zarr,
+    multicube_augmented_normalizer,
 )
 from hw3.model import BasePolicy, build_policy
 
 # TODO: Any imports you want from torch or other libraries we use. Not allowed: libraries we don't use
 from torch.utils.data import DataLoader, random_split
 
-# TODO: Choose your own hyperparameters!
-EPOCHS = 200 
-BATCH_SIZE = 64
-LR = 1e-3
-VAL_SPLIT = 0.3
+VAL_SPLIT = 0.1
 
 
 def train_one_epoch(
@@ -65,19 +61,17 @@ def train_one_epoch(
 
     for batch in loader:
         states, action_chunks = batch
-        # TODO: Implement the training step for one batch here.
-        # This mostly: Get states and action_chunks onto the correct device, compute the loss, and step the optimizer.
         states = states.to(device)
         action_chunks = action_chunks.to(device)
-        
+
         optimizer.zero_grad()
         loss = model.compute_loss(states, action_chunks)
         loss.backward()
         optimizer.step()
-        
+
         total_loss += loss.item()
         n_batches += 1
-        
+
     return total_loss / max(n_batches, 1)
 
 
@@ -93,9 +87,9 @@ def evaluate(
 
     for batch in loader:
         states, action_chunks = batch
-        # TODO: Implement the evaluation step for one batch here.
         states = states.to(device)
         action_chunks = action_chunks.to(device)
+
         loss = model.compute_loss(states, action_chunks)
         total_loss += loss.item()
         n_batches += 1
@@ -104,30 +98,9 @@ def evaluate(
 
 
 def main() -> None:
-    # TODO: You may add any cli arguments that make life easier for you like learning rate etc.
     parser = argparse.ArgumentParser(description="Train action-chunking policy.")
     parser.add_argument(
-        "--d-model",
-        type=int,
-        default=256,
-        help="Transformer d_model dimension (default: 256).",
-    )
-    parser.add_argument(
-        "--depth",
-        type=int,
-        default=3,
-        help="Transformer depth (number of layers) (default: 3).",
-    )
-    parser.add_argument(
         "--zarr", type=Path, required=True, help="Path to processed .zarr store."
-    )
-    parser.add_argument(
-        "--extra-zarr",
-        nargs="*",
-        type=Path,
-        default=None,
-        dest="extra_zarr",
-        help="Additional zarr paths to merge.",
     )
     parser.add_argument(
         "--policy",
@@ -144,32 +117,48 @@ def main() -> None:
     parser.add_argument(
         "--state-keys",
         nargs="+",
-        default=None,
+        default=["state_ee_xyz", "state_gripper", "state_cube[:3]", "state_obstacle"],
         help='State array key specs to concatenate, e.g. state_ee_xyz state_gripper "state_cube[:3]". '
         "Supports column slicing with [:N], [M:], [M:N]. "
-        "If omitted, uses the state_key attribute from the zarr metadata.",
+        "If omitted, uses sensible defaults for single-cube ee task.",
     )
     parser.add_argument(
         "--action-keys",
         nargs="+",
-        default=None,
+        default=["action_ee_xyz", "action_gripper"],
         help="Action array key specs to concatenate, e.g. action_ee_xyz action_gripper. "
         "Supports column slicing with [:N], [M:], [M:N]. "
-        "If omitted, uses the action_key attribute from the zarr metadata.",
+        "If omitted, uses sensible defaults for single-cube ee task.",
     )
     parser.add_argument(
-        "--dropout",
-        type=float,
-        default=0.1,
-        help="Dropout probability after each hidden ReLU (default: 0.1). Set to 0 to disable.",
+        "--extra-zarr",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="Additional .zarr stores to merge (e.g. DAgger data).",
     )
     parser.add_argument(
-        "--episode-split",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Split by whole episodes (default). Use --no-episode-split for random timestep split.",
+        "--epochs",
+        type=int,
+        default=400,
+        help="Number of training epochs (default: 400).",
     )
-    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument(
+        "--batch-size", type=int, default=64, help="Batch size (default: 64)."
+    )
+    parser.add_argument(
+        "--lr", type=float, default=1e-3, help="Learning rate (default: 1e-3)."
+    )
+    parser.add_argument(
+        "--d-model", type=int, default=256, help="Hidden dimension (default: 256)."
+    )
+    parser.add_argument(
+        "--depth", type=int, default=4, help="Number of residual blocks (default: 4)."
+    )
+    parser.add_argument(
+        "--dropout", type=float, default=0.1, help="Dropout rate (default: 0.1)."
+    )
+    parser.add_argument("--seed", type=int, default=69, help="Random seed.")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -194,30 +183,52 @@ def main() -> None:
             state_keys=args.state_keys,
             action_keys=args.action_keys,
         )
-    normalizer = Normalizer.from_data(states, actions)
+    # ── build dataset (with color-permutation augmentation for multitask) ─
+    if args.policy == "multitask":
+        col_ranges = compute_state_column_ranges(args.state_keys, args.zarr)
+        cube_keys = [k for k in args.state_keys if "pos_cube_" in k]
+        goal_keys = [k for k in args.state_keys if k.startswith("state_goal")]
+        assert len(cube_keys) == 3, f"Expected 3 cube keys, got {cube_keys}"
+        assert len(goal_keys) == 1, f"Expected 1 goal key, got {goal_keys}"
+        cube_col_ranges = [col_ranges[k] for k in cube_keys]
+        goal_col_range = col_ranges[goal_keys[0]]
 
+        normalizer = multicube_augmented_normalizer(
+            states, actions, cube_col_ranges, goal_col_range
+        )
+        dataset = MultiCubeAugDataset(
+            states,
+            actions,
+            ep_ends,
+            chunk_size=args.chunk_size,
+            normalizer=normalizer,
+            cube_col_ranges=cube_col_ranges,
+            goal_col_range=goal_col_range,
+        )
+    else:
+        normalizer = Normalizer.from_data(states, actions)
+        dataset = SO100ChunkDataset(
+            states,
+            actions,
+            ep_ends,
+            chunk_size=args.chunk_size,
+            normalizer=normalizer,
+        )
+    print(f"Dataset: {len(dataset)} samples, chunk_size={args.chunk_size}")
     print(f"  state_dim={states.shape[1]}, action_dim={actions.shape[1]}")
 
     # ── train / val split ─────────────────────────────────────────────
-    if args.episode_split:
-        (tr_states, tr_actions, tr_ends), (va_states, va_actions, va_ends) = (
-            episode_train_val_split(states, actions, ep_ends, val_ratio=VAL_SPLIT, seed=args.seed)
-        )
-        train_ds = SO100ChunkDataset(tr_states, tr_actions, tr_ends, chunk_size=args.chunk_size, normalizer=normalizer)
-        val_ds   = SO100ChunkDataset(va_states, va_actions, va_ends, chunk_size=args.chunk_size, normalizer=normalizer)
-    else:
-        full_ds = SO100ChunkDataset(states, actions, ep_ends, chunk_size=args.chunk_size, normalizer=normalizer)
-        n_val = max(1, int(len(full_ds) * VAL_SPLIT))
-        train_ds, val_ds = random_split(
-            full_ds, [len(full_ds) - n_val, n_val], generator=torch.Generator().manual_seed(args.seed)
-        )
-    print(f"Dataset: {len(train_ds)} train / {len(val_ds)} val samples, chunk_size={args.chunk_size}")
+    n_val = max(1, int(len(dataset) * VAL_SPLIT))
+    n_train = len(dataset) - n_val
+    train_ds, val_ds = random_split(
+        dataset, [n_train, n_val], generator=torch.Generator().manual_seed(args.seed)
+    )
 
     train_loader = DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0
+        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=0
     )
     val_loader = DataLoader(
-        val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0
+        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0
     )
 
     # ── model ─────────────────────────────────────────────────────────
@@ -225,24 +236,19 @@ def main() -> None:
         args.policy,
         state_dim=states.shape[1],
         action_dim=actions.shape[1],
-        # TODO: build with your desired specifications
         chunk_size=args.chunk_size,
         d_model=args.d_model,
         depth=args.depth,
-        dropout=args.dropout,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {n_params:,}")
 
-    # TODO: implement an optimizer and scheduler
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     # ── training loop ─────────────────────────────────────────────────
     best_val = float("inf")
-    train_losses: list[float] = []
-    val_losses: list[float] = []
 
     # Derive action space tag from action keys (e.g. "ee_xyz", "joints")
     action_space = "unknown"
@@ -269,7 +275,10 @@ def main() -> None:
     save_path = ckpt_dir / save_name
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    for epoch in range(1, EPOCHS + 1):
+    train_losses = []
+    val_losses = []
+
+    for epoch in range(1, args.epochs + 1):
         train_loss = train_one_epoch(model, train_loader, optimizer, device)
         val_loss = evaluate(model, val_loader, device)
         scheduler.step()
@@ -297,45 +306,30 @@ def main() -> None:
                     "action_keys": args.action_keys,
                     "state_dim": int(states.shape[1]),
                     "action_dim": int(actions.shape[1]),
-                    "d_model": args.d_model,
-                    "depth": args.depth,
-                    "dropout": args.dropout,
+                    "d_model": model.d_model,
+                    "depth": model.depth,
                     "val_loss": val_loss,
-                    "epochs": EPOCHS,
-                    "batch_size": BATCH_SIZE,
-                    "lr": LR,
-                    "val_split": VAL_SPLIT,
                 },
                 save_path,
             )
             tag = " ✓ saved"
 
         print(
-            f"Epoch {epoch:3d}/{EPOCHS} | "
+            f"Epoch {epoch:3d}/{args.epochs} | "
             f"train {train_loss:.6f} | val {val_loss:.6f}{tag}"
         )
 
     print(f"\nBest val loss: {best_val:.6f}")
     print(f"Checkpoint: {save_path}")
 
-    # ── save loss CSV ──────────────────────────────────────────────────
-    csv_path = save_path.with_suffix(".csv")
-    with csv_path.open("w") as f:
-        f.write("epoch,train_loss,val_loss\n")
-        for i, (tl, vl) in enumerate(zip(train_losses, val_losses), start=1):
-            f.write(f"{i},{tl:.8f},{vl:.8f}\n")
-    print(f"Loss CSV:  {csv_path}")
-
-    # ── plot loss curves ───────────────────────────────────────────────
-    epochs_range = range(1, EPOCHS + 1)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(epochs_range, train_losses, label="train")
-    ax.plot(epochs_range, val_losses, label="val")
+    # Save loss plot
+    fig, ax = plt.subplots()
+    ax.plot(range(1, args.epochs + 1), train_losses, label="Train")
+    ax.plot(range(1, args.epochs + 1), val_losses, label="Val")
     ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
-    ax.set_title(f"Training curves — {action_space} / {args.policy}")
+    ax.set_ylabel("MSE Loss")
     ax.legend()
-    ax.grid(True, alpha=0.3)
+    ax.set_title(f"Training Loss ({action_space} / {args.policy})")
     plot_path = save_path.with_suffix(".png")
     fig.savefig(plot_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

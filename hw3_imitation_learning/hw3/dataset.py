@@ -155,6 +155,25 @@ def load_and_merge_zarrs(
     return merged_states, merged_actions, merged_ep_ends
 
 
+def compute_state_column_ranges(
+    state_keys: list[str],
+    zarr_path: Path,
+) -> dict[str, tuple[int, int]]:
+    """Return the (start, end) column range each state key occupies in the concatenated state."""
+    root = zarr.open_group(str(zarr_path), mode="r")
+    data = root["data"]
+    ranges: dict[str, tuple[int, int]] = {}
+    offset = 0
+    for spec in state_keys:
+        name, col_slice = _parse_key_spec(spec)
+        arr = data[name]
+        full_width = arr.shape[1] if arr.ndim > 1 else 1
+        width = len(range(*col_slice.indices(full_width)))
+        ranges[spec] = (offset, offset + width)
+        offset += width
+    return ranges
+
+
 def audit_zarr_keys(
     zarr_path: Path,
     state_keys: list[str] | None,
@@ -289,3 +308,101 @@ class SO100ChunkDataset(Dataset):
         action_t = torch.from_numpy(action_chunk).float()
 
         return state_t, action_t
+
+
+PERMS_3 = [
+    (0, 1, 2),
+    (0, 2, 1),
+    (1, 0, 2),
+    (1, 2, 0),
+    (2, 0, 1),
+    (2, 1, 0),
+]
+
+
+def multicube_augmented_normalizer(
+    states: np.ndarray,
+    actions: np.ndarray,
+    cube_col_ranges: list[tuple[int, int]],
+    goal_col_range: tuple[int, int],
+) -> Normalizer:
+    """Compute a normalizer whose stats reflect all 6 color permutations.
+
+    When demos are recorded for only one cube color (e.g. red), state_goal is
+    always [1, 0, 0] and each cube-position slot only ever sees one cube's
+    positions. A naive normalizer would learn mean=[1,0,0] / std=[0,0,0] for
+    the goal and similarly skewed stats for the cube columns. After the online
+    permutation augmentation produces goals like [0,1,0] or [0,0,1], normalizing
+    with those original stats gives garbage values.
+
+    This function fixes the problem by computing mean/std as if all 6 color
+    permutations existed in the data.  For example state_goal gets
+    mean=[1/3, 1/3, 1/3] with a proper std, and each cube-position slot sees
+    data from all three cubes, giving balanced statistics.
+    """
+    all_states = []
+    gs, ge = goal_col_range
+    for perm in PERMS_3:
+        s = states.copy()
+        orig_cubes = [states[:, a:b].copy() for a, b in cube_col_ranges]
+        for i, (a, b) in enumerate(cube_col_ranges):
+            s[:, a:b] = orig_cubes[perm[i]]
+        orig_goal = states[:, gs:ge].copy()
+        for i in range(3):
+            s[:, gs + i] = orig_goal[:, perm[i]]
+        all_states.append(s)
+    return Normalizer.from_data(np.concatenate(all_states), actions)
+
+
+class MultiCubeAugDataset(Dataset):
+    """SO100ChunkDataset with online color-permutation augmentation.
+
+    For each sample, randomly permutes the 3 cube identities (red/green/blue)
+    by swapping cube position columns and the goal one-hot. This gives 6x
+    effective data diversity without expanding the zarr on disk.
+    """
+
+    def __init__(
+        self,
+        states: np.ndarray,
+        actions: np.ndarray,
+        episode_ends: np.ndarray,
+        chunk_size: int,
+        normalizer: Normalizer | None,
+        cube_col_ranges: list[tuple[int, int]],
+        goal_col_range: tuple[int, int],
+    ) -> None:
+        self.states = states
+        self.actions = actions
+        self.chunk_size = chunk_size
+        self.normalizer = normalizer
+        self.indices = build_valid_indices(episode_ends, chunk_size)
+        self.cube_col_ranges = cube_col_ranges
+        self.goal_col_range = goal_col_range
+        self.rng = np.random.default_rng()
+        n = len(self.indices)
+        print(f"MultiCubeAugDataset: {n} samples × 6 color permutations = {n * 6} effective samples")
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        t = int(self.indices[idx])
+        state = self.states[t].copy()
+        action_chunk = self.actions[t : t + self.chunk_size]
+
+        # Apply a random color permutation
+        perm = PERMS_3[self.rng.integers(6)]
+        orig_cubes = [state[s:e].copy() for s, e in self.cube_col_ranges]
+        for i, (s, e) in enumerate(self.cube_col_ranges):
+            state[s:e] = orig_cubes[perm[i]]
+        gs, ge = self.goal_col_range
+        orig_goal = state[gs:ge].copy()
+        for i in range(3):
+            state[gs + i] = orig_goal[perm[i]]
+
+        if self.normalizer is not None:
+            state = self.normalizer.normalize_state(state)
+            action_chunk = self.normalizer.normalize_action(action_chunk)
+
+        return torch.from_numpy(state).float(), torch.from_numpy(action_chunk).float()
