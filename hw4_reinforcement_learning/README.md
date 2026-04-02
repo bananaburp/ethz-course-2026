@@ -16,7 +16,7 @@ From the repository root:
 ```bash
 cd hw4_reinforcement_learning
 python3.12 -m venv .venv
-source .venv/bin/activate
+source ../.venv/bin/activate
 ```
 
 **Windows (PowerShell)**
