@@ -23,7 +23,7 @@ class PolicyIteration:
             over actions at state s.
     """
 
-    def __init__(self, env, theta=1e-3, gamma=0.1):
+    def __init__(self, env, theta=1e-3, gamma=0.01):
         """Initialize policy iteration."""
         self.env = env
         self.theta = theta
@@ -182,7 +182,7 @@ class ValueIteration:
                     for (prob, next_state, reward, done) in self.env.P[s][a]:
                         qsa += prob *(reward + self.gamma * self.v[next_state])
                     qsa_list.append(qsa)
-                
+
                 new_v[s] = max(qsa_list)
                 max_diff = max(max_diff, abs(new_v[s] - self.v[s]))
 

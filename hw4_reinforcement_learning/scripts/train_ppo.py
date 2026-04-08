@@ -2,6 +2,7 @@
 Training script for PPO on the SO100 position tracking task.
 """
 
+import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -51,10 +52,15 @@ def evaluate_policy(env, agent, num_episodes=5):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint to resume from (e.g. logs/ppo/run/iter_100.pt)")
+    parser.add_argument("--total-iterations", type=int, default=None, help="Override total_iterations from config (useful when resuming)")
+    args = parser.parse_args()
+
     config = PPO_PARAMETERS
 
     seed = config["seed"]
-    total_iterations = config["total_iterations"]
+    total_iterations = args.total_iterations if args.total_iterations is not None else config["total_iterations"]
     n_steps = config["n_steps"]
     gamma = config["gamma"]
     gae_lambda = config["gae_lambda"]
@@ -100,16 +106,27 @@ def main():
     )
 
     log_dir = ROOT_DIR / "logs" / "ppo"
-    run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
-    run_dir = ensure_dir(log_dir / run_name)
+    start_iter = 0
+
+    if args.checkpoint is not None:
+        checkpoint_path = Path(args.checkpoint)
+        agent.load(checkpoint_path)
+        # parse iteration from filename: iter_N.pt
+        stem = checkpoint_path.stem  # e.g. "iter_100"
+        start_iter = int(stem.split("_")[1])
+        run_dir = ensure_dir(checkpoint_path.parent)
+        print(f"Resuming from checkpoint: {checkpoint_path} (iteration {start_iter})")
+    else:
+        run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
+        run_dir = ensure_dir(log_dir / run_name)
+
     writer = SummaryWriter(log_dir=run_dir)
 
     obs, _ = env.reset()
     obs = torch.as_tensor(obs, dtype=torch.float, device=device).unsqueeze(0)
     done = False
-    
 
-    for it in range(total_iterations):
+    for it in range(start_iter, total_iterations):
         agent.train_mode()
         with torch.inference_mode():
             for _ in range(n_steps):

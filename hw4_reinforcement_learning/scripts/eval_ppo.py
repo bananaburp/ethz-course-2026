@@ -1,6 +1,8 @@
 """
 Evaluation script for PPO on the SO100 position tracking task.
 Supports quantitative evaluation and GUI playback.
+
+python scripts/eval_ppo.py --model_path "logs/ppo/26_04_07_09_28_06_model/iter_1000.pt"
 """
 
 import sys

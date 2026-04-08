@@ -2,6 +2,7 @@
 Training script for SAC on the SO100 position tracking task.
 """
 
+import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,13 @@ from exercises.ex4_sac import SACAgent, SACUpdateStats
 from exercises.ex4_sac_config import SAC_PARAMETERS
 from rl.buffers import ReplayBuffer
 from rl.common import ensure_dir, set_seed
+
+
+def save_checkpoint(agent: SACAgent, run_dir: Path, it: int, step: int) -> Path:
+    ckpt_path = run_dir / f"ckpt_iter_{it}_step_{step}.pt"
+    agent.save(ckpt_path)
+    print(f"[SAC] Checkpoint saved: {ckpt_path}")
+    return ckpt_path
 
 
 def evaluate_policy(env: SO100RLEnv, agent: SACAgent, num_episodes=5):
@@ -51,6 +59,10 @@ def evaluate_policy(env: SO100RLEnv, agent: SACAgent, num_episodes=5):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from.")
+    args = parser.parse_args()
+
     config = SAC_PARAMETERS
 
     seed = config["seed"]
@@ -94,6 +106,13 @@ def main():
         max_size=replay_size,
         device=device,
     )
+
+    if args.resume is not None:
+        resume_path = Path(args.resume).expanduser().resolve()
+        if not resume_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {resume_path}")
+        agent.load(str(resume_path))
+        print(f"[SAC] Resumed from checkpoint: {resume_path}")
 
     log_dir = ROOT_DIR / "logs" / "sac"
     run_name = datetime.now().strftime("%y_%m_%d_%H_%M_%S_model")
@@ -174,11 +193,9 @@ def main():
             )
 
             if eval_step % save_interval == 0:
-                model_path = run_dir / f"iter_{it}.pt"
-                agent.save(model_path)
+                save_checkpoint(agent, run_dir, it, step)
 
-    final_model_path = run_dir / f"iter_{it}.pt"
-    agent.save(final_model_path)
+    save_checkpoint(agent, run_dir, it, step)
 
     env.close()
     eval_env.close()

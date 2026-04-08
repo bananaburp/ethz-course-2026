@@ -348,7 +348,7 @@ Training artifacts are saved to:
 Training curves are saved in Tensorboard. Run the following command to view them:
 
 ```bash
-tensorboard --logdir="your tensorboard event file path"
+tensorboard --logdir="logs/ppo/26_04_06_23_12_57_model"
 ```
 
 ### Evaluation
@@ -362,7 +362,7 @@ python scripts/eval_ppo.py
 To run policy playback in a GUI window:
 
 ```bash
-python scripts/eval_ppo.py --play
+mjpython scripts/eval_ppo.py --play
 ```
 
 On macOS, if MuJoCo/OpenGL rendering issues occur, run evaluation with:

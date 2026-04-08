@@ -27,7 +27,7 @@ def main():
     args = parse_args()
     env = CliffWalkingEnv(slip_chance=args.slip_chance)
 
-    agent = PolicyIteration(env, theta=1e-3, gamma=0.9)
+    agent = PolicyIteration(env, theta=1e-3, gamma=0.5)
     value_fn, policy = agent.policy_iteration()
 
     # Save logs relative to the project root
