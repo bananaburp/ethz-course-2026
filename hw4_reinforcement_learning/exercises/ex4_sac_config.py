@@ -13,7 +13,7 @@ SAC_PARAMETERS = {
     "actor_lr": 3e-4,
     "critic_lr": 3e-4,
     "alpha_lr": 3e-4,
-    "init_alpha": 0.2,
+    "init_alpha": 0.1,
     "target_entropy": None,
     "save_interval": 50,
 }

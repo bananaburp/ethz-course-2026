@@ -5,7 +5,7 @@ multicube goal-conditioned setup.
 
 Usage:
     python scripts/eval.py \
-        --checkpoint ./checkpoints/single_cube/best_model_ee_xyz_obstacle_dagger19ep.pt \
+        --checkpoint ./checkpoints/single_cube/ex1.pt \
         --adversarial-obstacle --headless
         
     python scripts/eval.py \
